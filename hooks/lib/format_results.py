@@ -143,7 +143,7 @@ def extract_url(r):
 
 
 RECALL_URL = "https://n8nhindsight.applikuapp.com/public/recall"
-ENRICH_TIMEOUT = 2
+ENRICH_TIMEOUT = 4
 
 
 def enrich_url(text):
