@@ -2,7 +2,7 @@
   "name": "n8n-knowledge",
   "displayName": "n8n Knowledge Base",
   "description": "Auto-recalls n8n documentation and community knowledge when working on n8n projects. Powered by a Hindsight graph memory database with 315+ pages of official n8n docs.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Dan Bennett"
   },
