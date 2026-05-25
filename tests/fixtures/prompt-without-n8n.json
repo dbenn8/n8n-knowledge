@@ -1,0 +1,8 @@
+{
+  "session_id": "test-session-2",
+  "transcript_path": "/tmp/test-transcript.jsonl",
+  "cwd": "/Users/test/my-project",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "How do I write a Python function to sort a list?"
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-recall.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

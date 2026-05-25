@@ -1,0 +1,34 @@
+{
+  "results": [
+    {
+      "id": "aaa",
+      "text": "To install n8n with Docker Compose, create a docker-compose.yml file with the n8n service and a PostgreSQL database.",
+      "tags": ["type:docs", "source:docs"],
+      "metadata": {"url": "https://docs.n8n.io/hosting/installation/server-setups/docker-compose/", "section": "hosting"}
+    },
+    {
+      "id": "bbb",
+      "text": "MCP Server Trigger discards incoming request headers, unlike Webhook Trigger, preventing valid MCP server use cases.",
+      "tags": ["type:github-issue", "source:github", "label:status:in-linear"],
+      "metadata": {"url": "https://github.com/n8n-io/n8n/issues/12345", "like_count": "15", "vote_count": "7"}
+    },
+    {
+      "id": "ccc",
+      "text": "User reports webhook from VAPI to n8n not working despite correct setup.",
+      "tags": ["type:community-post", "source:discourse", "category:questions", "outcome:solved"],
+      "metadata": {"url": "https://community.n8n.io/t/webhook-to-vapi/119383", "views": "569", "like_count": "3", "has_accepted_answer": "True"}
+    },
+    {
+      "id": "ddd",
+      "text": "Built an automated invoice processing workflow using n8n with Google Sheets and Stripe integration.",
+      "tags": ["type:community-post", "source:discourse", "category:built-with-n8n", "outcome:unsolved"],
+      "metadata": {"url": "https://community.n8n.io/t/invoice-workflow/98765", "views": "1200", "like_count": "22", "vote_count": "8"}
+    },
+    {
+      "id": "eee",
+      "text": "New user asking about how to connect n8n to their local database.",
+      "tags": ["type:community-post", "source:discourse", "category:questions", "outcome:unsolved"],
+      "metadata": {"url": "https://community.n8n.io/t/connect-db/55555", "views": "45", "like_count": "0"}
+    }
+  ]
+}

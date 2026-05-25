@@ -1,0 +1,8 @@
+{
+  "session_id": "test-session-3",
+  "transcript_path": "/tmp/test-transcript.jsonl",
+  "cwd": "/Users/test/n8n-project",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "The webhook trigger isn't firing when I send a POST request"
+}

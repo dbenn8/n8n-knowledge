@@ -1,0 +1,24 @@
+{
+  "name": "n8n-knowledge",
+  "displayName": "n8n Knowledge Base",
+  "description": "Auto-recalls n8n documentation and community knowledge when working on n8n projects. Powered by a Hindsight graph memory database with 315+ pages of official n8n docs.",
+  "version": "0.3.0",
+  "author": {
+    "name": "Dan Bennett"
+  },
+  "repository": "https://github.com/dbenn8/n8n-knowledge",
+  "userConfig": {
+    "enableAutoRecall": {
+      "type": "boolean",
+      "title": "Enable Auto-Recall",
+      "description": "Automatically recall n8n docs when n8n-related terms are detected. Disable to use manual recall only (saves tokens).",
+      "default": true
+    },
+    "showRecallResults": {
+      "type": "boolean",
+      "title": "Show Recall Results",
+      "description": "Show [n8n Knowledge Base] citations in responses. Set to false for silent context injection.",
+      "default": true
+    }
+  }
+}
