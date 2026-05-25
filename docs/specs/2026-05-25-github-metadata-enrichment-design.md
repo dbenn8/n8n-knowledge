@@ -8,7 +8,7 @@ The n8n Knowledge Plugin currently syncs GitHub issues with minimal metadata (UR
 
 ### 1. Sync script (n8n-hindsight/scripts/sync-github.py)
 
-**Issue scope:** Fetch open + closed issues. Fresh issues (< 60 days old) always included. Older closed issues included if they have 2+ comments, any reactions, or labels indicating team assignment (status:in-linear, status:team-assigned). Target ~4,500 total issues (open + recent/high-signal closed).
+**Issue scope:** Fetch all open issues + newest closed issues, no filtering by engagement or labels. Sort closed by updated descending, stop when total (open + closed) reaches ~4,500. All issues are valuable — stale, incomplete, won't-fix, and duplicates all provide signal. Hindsight's consolidation synthesizes patterns across them (e.g., frequently reported issues, common workarounds).
 
 **New metadata fields per issue:**
 
@@ -16,15 +16,18 @@ The n8n Knowledge Plugin currently syncs GitHub issues with minimal metadata (UR
 |---|---|---|
 | labels | `issue.labels[].name` | tags: `label:{name}` (already done) |
 | reactions_total | `issue.reactions.total_count` | metadata: `reactions_total` |
-| reactions_plus1 | `issue.reactions["+1"]` | metadata: `reactions_plus1` |
+| of_those_plus1 | `issue.reactions["+1"]` | metadata: `of_those_plus1` |
+| state_reason | `issue.state_reason` | metadata: `state_reason` (completed/not_planned/duplicate) |
 | comments | `issue.comments` | metadata: `comments` |
 | state | `issue.state` | metadata: `state` |
 | closed_at | `issue.closed_at` | metadata: `closed_at` |
 | author_association | `issue.author_association` | metadata: `author_association` |
 
-**Filtering change:** Remove `HIGH_SIGNAL_LABELS` filter for fresh issues (< 60 days). Older issues still filtered by engagement or team-assignment labels.
+**Filtering change:** Remove all engagement-based filtering. Ingest everything up to the ~4,500 cap. The `HIGH_SIGNAL_LABELS` filter and `min_comments` check are removed.
 
 ### 2. Confidence scoring (n8n-knowledge/hooks/lib/format_results.py)
+
+**Base score change:** `github_base` lowered from 60 to 49. GitHub issues start at LOW and must earn their way up via engagement or clear signals — same philosophy as community posts.
 
 **GitHub engagement formula:**
 ```
@@ -37,16 +40,24 @@ Comments are higher friction than reactions, worth 4x.
 
 | Bonus | Default | Condition |
 |---|---|---|
-| `team_assigned_bonus` | 10 | Issue has `status:in-linear` or `status:team-assigned` label |
+| `clear_signal_bonus` | 25 | Closed with `state_reason` present AND no `Stale` label, OR open with `status:in-linear` or `status:team-assigned` label |
 | `author_member_bonus` | 5 | `author_association` is MEMBER or COLLABORATOR |
 
-These stack with existing thresholds. A github issue (base 60) with team assignment (+10) and high engagement (+20) scores 90 = HIGH.
+The old `team_assigned_bonus` (10) is removed — subsumed by `clear_signal_bonus` (25).
 
-Closed issues with a resolution treated like solved community posts: `+solved_bonus` (25).
+**Scoring examples:**
 
-**Reason string update:** Include labels and engagement in the display.
+| Scenario | Score | Level |
+|---|---|---|
+| GitHub, no signals | 49 | LOW |
+| GitHub + medium engagement | 59 | MEDIUM |
+| GitHub + author member | 54 | MEDIUM |
+| GitHub + clear signal | 74 | HIGH |
+| GitHub + clear signal + high engagement | 94 | HIGH |
+
+**Reason string update:** Include bucket label, labels, and engagement in the display.
 - Before: `GitHub issue, 7 votes, 15 likes`
-- After: `GitHub issue, team:ai, in-linear, 5 reactions, 12 comments, closed`
+- After: `GitHub issue, team:ai, in-linear, completed, 5 reactions, 12 comments`
 
 ### 3. Truncation-aware metadata formatting (format_results.py)
 
@@ -55,30 +66,60 @@ Applies to ALL source types (docs, github, community).
 **Current behavior:** Text truncated at `max_text_length_{level}`, URL prepended before text.
 
 **New behavior:**
-1. Build the metadata suffix for each result:
-   - GitHub: `Source: {url} | {state} | {label_summary} | {reactions} reactions, {comments} comments`
+1. Build the metadata suffix for each result. GitHub suffixes include a contextual hint based on the issue's resolution bucket (see below). Community and docs use a simpler format.
+   - GitHub: `Source: {url} | {bucket_hint} | {label_summary} | {reactions} reactions, {comments} comments`
    - Community: `Source: {url} | {solved_status} | {votes} votes, {likes} likes, {views} views`
    - Docs: `Source: {url}`
 2. Calculate metadata suffix length
 3. Truncate text body at `max_text_length - metadata_suffix_length` (floor of 300 chars on text body)
 4. Append metadata suffix after text
 
-**Output format:**
+**GitHub resolution buckets and suffix hints:**
+
+| Bucket | Condition | Suffix hint |
+|---|---|---|
+| Fixed | `state_reason=completed`, no `Stale` label | `fixed — update n8n for the fix` |
+| Acknowledged | Open + `status:in-linear` or `status:team-assigned` | `acknowledged — n8n is tracking internally` |
+| Won't fix | `state_reason=not_planned` or label `closed:working-as-expected` | `won't fix — search for workarounds` |
+| Support redirect | Label `closed:support-issue` | `support issue — check docs or community` |
+| Duplicate | `state_reason=duplicate` or label `closed:duplicate` | `duplicate — search for the original issue` |
+| Stale | Label `Stale` | `stale — no resolution, but others reported this` |
+| Incomplete | Label `closed:incomplete-template` | `incomplete report — problem may be real but unconfirmed` |
+| No signal | Open, no team labels, no state_reason | `no resolution yet` |
+
+Bucket detection is checked in priority order (top to bottom). First match wins.
+
+**Output examples:**
 ```
-1. [HIGH — GitHub issue, team:ai, in-linear, closed] MCP Server Trigger discards
-   incoming request headers, unlike Webhook Trigger...
-   Source: https://github.com/n8n-io/n8n/issues/30926 | closed | team:ai, in-linear | 5 reactions, 12 comments
+1. [HIGH — GitHub issue, team:ai, completed] MCP Server Trigger drops headers...
+   Source: https://...issues/30926 | fixed — update n8n for the fix | team:ai | 5 reactions, 12 comments
+
+2. [MEDIUM — GitHub issue, acknowledged] OAuth state payload too large...
+   Source: https://...issues/30853 | acknowledged — n8n is tracking internally | team:cats | 3 reactions, 8 comments
+
+3. [MEDIUM — GitHub issue, not_planned] Webhook URLs change on reload...
+   Source: https://...issues/12345 | won't fix — search for workarounds | 3 reactions, 8 comments
+
+4. [LOW — GitHub issue, stale] Timeout with large payloads...
+   Source: https://...issues/99999 | stale — no resolution, but others reported this | 1 reactions, 0 comments
+
+5. [LOW — GitHub issue] New issue with no response yet...
+   Source: https://...issues/77777 | no resolution yet | 0 reactions, 0 comments
 ```
 
-The confidence label and reason on line 1 are the quick-scan signal. The metadata block at the end has the full detail and source link. Text gets the leftover space after reserving room for metadata.
+The confidence label and reason on line 1 are the quick-scan signal. The metadata suffix at the end has the full detail, source link, and contextual hint. Text gets the leftover space after reserving room for metadata.
+
+**Note:** `state_reason` is GitHub-specific. Community and docs results do not include it.
 
 ### 4. Consolidation directive update (n8n Hindsight bank)
 
 Update the existing directive to also preserve:
 - Labels (especially team assignments: team:ai, team:cats, status:in-linear)
 - Reaction counts and comment counts
-- Open/closed state
+- Open/closed state and state_reason
 - Author association (MEMBER vs community reporter)
+
+Add guidance for the consolidator to recognize patterns across related issues — e.g., frequently reported problems that get closed as stale/duplicate/incomplete should be synthesized into observations like "this is a common issue with no official fix" or "multiple users report this; n8n tracks it internally."
 
 This is in addition to the existing directive for URLs, votes, likes, views, and solved status.
 
@@ -90,8 +131,8 @@ Verify that the tool calling response passes through the new metadata fields so 
 
 | File | Change |
 |---|---|
-| `n8n-hindsight/scripts/sync-github.py` | Add closed issues, new metadata fields, update filtering |
-| `n8n-knowledge/hooks/lib/format_results.py` | New engagement formula, label bonuses, truncation-aware metadata |
+| `n8n-hindsight/scripts/sync-github.py` | Add closed issues, new metadata fields, remove filtering |
+| `n8n-knowledge/hooks/lib/format_results.py` | github_base to 49, clear_signal_bonus, engagement formula, truncation-aware metadata |
 | `n8n-knowledge/.claude/n8n-knowledge.local.md` | Add new config defaults |
 | `n8n-knowledge/README.md` | Document new config options |
 | `n8n-knowledge/tests/test-recall-format.sh` | Tests for new scoring and metadata formatting |
