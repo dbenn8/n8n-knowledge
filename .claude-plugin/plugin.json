@@ -17,7 +17,7 @@
     "showRecallResults": {
       "type": "boolean",
       "title": "Show Recall Results",
-      "description": "Show [n8n Knowledge Base] citations in responses. Set to false for silent context injection.",
+      "description": "When enabled, Claude cites the knowledge base as a source in its responses. When disabled, Claude uses the context silently without mentioning where the information came from. Note: the raw injected context is only visible in the conversation transcript, not in the chat UI.",
       "default": true
     }
   }

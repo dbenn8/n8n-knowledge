@@ -49,7 +49,7 @@ git clone https://github.com/dbenn8/n8n-knowledge.git
 | Setting | Default | Description |
 |---|---|---|
 | `enableAutoRecall` | `true` | Auto-recall on every message. Disable for manual-only (saves tokens). |
-| `showRecallResults` | `true` | Show `[n8n Knowledge Base]` citations. Set `false` for silent mode. |
+| `showRecallResults` | `true` | When enabled, Claude cites the knowledge base as a source in its responses. When disabled, Claude uses the context silently. Note: raw injected context is only visible in the conversation transcript, not in the chat UI. |
 
 ### Scoring tuning (optional)
 
