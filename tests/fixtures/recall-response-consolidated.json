@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "id": "fff",
+      "text": "MCP Server Trigger discards incoming request headers, unlike Webhook Trigger.",
+      "type": "observation",
+      "tags": ["type:github-issue", "source:github"],
+      "metadata": null,
+      "context": null
+    },
+    {
+      "id": "ggg",
+      "text": "To install n8n with Docker Compose, create a docker-compose.yml with the n8n service.",
+      "type": "world",
+      "tags": ["type:docs", "source:docs"],
+      "metadata": {"url": "https://docs.n8n.io/hosting/docker-compose/"}
+    }
+  ]
+}

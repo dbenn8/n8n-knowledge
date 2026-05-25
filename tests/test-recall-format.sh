@@ -88,6 +88,40 @@ empty_result=$(python3 "$LIB_DIR/format_results.py" "/tmp/empty-recall.json" 2>/
 assert_eq "empty results returns empty string" "" "${empty_result:-}"
 rm /tmp/empty-recall.json
 
+# Results with direct URLs always show Source
+assert_contains "result with metadata URL shows Source" "Source: https://docs.n8n.io" "$context"
+
+# Consolidated result enrichment — success case (mock enrichment to return a URL)
+CONSOLIDATED_FIXTURE="$SCRIPT_DIR/fixtures/recall-response-consolidated.json"
+enrichment_success=$(python3 -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+import format_results as fr
+# Patch enrich_missing_urls to simulate successful enrichment
+original = fr.enrich_missing_urls
+fr.enrich_missing_urls = lambda filtered: ({0: 'https://github.com/n8n-io/n8n/issues/30926'}, set())
+result = fr.format_results('$CONSOLIDATED_FIXTURE')
+fr.enrich_missing_urls = original
+print(result)
+" 2>/dev/null) || true
+assert_contains "enrichment success shows source URL" "Source: https://github.com/n8n-io/n8n/issues/30926" "$enrichment_success"
+assert_not_contains "enrichment success has no unavailable message" "Source unavailable" "$enrichment_success"
+
+# Consolidated result enrichment — timeout case (mock enrichment to return nothing)
+enrichment_timeout=$(python3 -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+import format_results as fr
+# Patch enrich_missing_urls to simulate timeout (no URL found, index 0 failed)
+original = fr.enrich_missing_urls
+fr.enrich_missing_urls = lambda filtered: ({}, {0})
+result = fr.format_results('$CONSOLIDATED_FIXTURE')
+fr.enrich_missing_urls = original
+print(result)
+" 2>/dev/null) || true
+assert_contains "enrichment timeout shows unavailable hint" "Source unavailable" "$enrichment_timeout"
+assert_contains "enrichment timeout suggests manual recall" "manual recall" "$enrichment_timeout"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
