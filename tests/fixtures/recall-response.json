@@ -9,8 +9,15 @@
     {
       "id": "bbb",
       "text": "MCP Server Trigger discards incoming request headers, unlike Webhook Trigger, preventing valid MCP server use cases.",
-      "tags": ["type:github-issue", "source:github", "label:status:in-linear"],
-      "metadata": {"url": "https://github.com/n8n-io/n8n/issues/12345", "like_count": "15", "vote_count": "7"}
+      "tags": ["type:github-issue", "source:github", "label:status:in-linear", "label:team:ai"],
+      "metadata": {
+        "url": "https://github.com/n8n-io/n8n/issues/12345",
+        "reactions_total": "15",
+        "of_those_plus1": "12",
+        "comments": "8",
+        "state": "open",
+        "author_association": "NONE"
+      }
     },
     {
       "id": "ccc",
@@ -29,6 +36,47 @@
       "text": "New user asking about how to connect n8n to their local database.",
       "tags": ["type:community-post", "source:discourse", "category:questions", "outcome:unsolved"],
       "metadata": {"url": "https://community.n8n.io/t/connect-db/55555", "views": "45", "like_count": "0"}
+    },
+    {
+      "id": "fff",
+      "text": "Job finished leaks EventEmitter listeners in queue mode.",
+      "tags": ["type:github-issue", "source:github", "label:Stale"],
+      "metadata": {
+        "url": "https://github.com/n8n-io/n8n/issues/99999",
+        "reactions_total": "1",
+        "of_those_plus1": "1",
+        "comments": "2",
+        "state": "closed",
+        "state_reason": "completed",
+        "author_association": "NONE"
+      }
+    },
+    {
+      "id": "ggg",
+      "text": "Webhook endpoint changes not planned for current architecture.",
+      "tags": ["type:github-issue", "source:github"],
+      "metadata": {
+        "url": "https://github.com/n8n-io/n8n/issues/88888",
+        "reactions_total": "3",
+        "of_those_plus1": "2",
+        "comments": "4",
+        "state": "closed",
+        "state_reason": "not_planned",
+        "author_association": "MEMBER"
+      }
+    },
+    {
+      "id": "hhh",
+      "text": "No response issue with zero engagement.",
+      "tags": ["type:github-issue", "source:github"],
+      "metadata": {
+        "url": "https://github.com/n8n-io/n8n/issues/77777",
+        "reactions_total": "0",
+        "of_those_plus1": "0",
+        "comments": "0",
+        "state": "open",
+        "author_association": "NONE"
+      }
     }
   ]
 }

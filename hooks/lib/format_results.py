@@ -10,9 +10,11 @@ DEFAULTS = {
     "high_threshold": 70,
     "medium_threshold": 50,
     "docs_base": 80,
-    "github_base": 60,
+    "github_base": 49,
     "community_base": 40,
     "solved_bonus": 25,
+    "clear_signal_bonus": 25,
+    "author_member_bonus": 5,
     "high_engagement_threshold": 10,
     "high_engagement_bonus": 20,
     "medium_engagement_threshold": 3,
@@ -61,7 +63,7 @@ def load_config(project_dir):
 
 
 def score_result(r, cfg):
-    """Score a single recall result. Returns (level, reason)."""
+    """Score a single recall result. Returns (level, reason, score)."""
     tags = r.get("tags", [])
     meta = r.get("metadata", {}) or {}
     tag_set = set(tags)
@@ -74,18 +76,7 @@ def score_result(r, cfg):
     elif any("source:discourse" in t for t in tags):
         source = "community"
 
-    solved = "outcome:solved" in tag_set
-    votes = int(meta.get("vote_count", 0))
-    likes = int(meta.get("like_count", 0))
-    views = int(meta.get("views", 0))
-    engagement = votes + likes
-
-    category = ""
-    for t in tags:
-        if t.startswith("category:"):
-            category = t.replace("category:", "")
-            break
-
+    # Base score
     if source == "docs":
         score = cfg["docs_base"]
     elif source == "github":
@@ -93,15 +84,46 @@ def score_result(r, cfg):
     else:
         score = cfg["community_base"]
 
-    if solved:
-        score += cfg["solved_bonus"]
-    if engagement >= cfg["high_engagement_threshold"]:
-        score += cfg["high_engagement_bonus"]
-    elif engagement >= cfg["medium_engagement_threshold"]:
-        score += cfg["medium_engagement_bonus"]
-    if views >= cfg["high_views_threshold"]:
-        score += cfg["views_bonus"]
+    # Community scoring
+    if source == "community":
+        solved = "outcome:solved" in tag_set
+        votes = int(meta.get("vote_count", 0))
+        likes = int(meta.get("like_count", 0))
+        views = int(meta.get("views", 0))
+        engagement = votes + likes
 
+        if solved:
+            score += cfg["solved_bonus"]
+        if engagement >= cfg["high_engagement_threshold"]:
+            score += cfg["high_engagement_bonus"]
+        elif engagement >= cfg["medium_engagement_threshold"]:
+            score += cfg["medium_engagement_bonus"]
+        if views >= cfg["high_views_threshold"]:
+            score += cfg["views_bonus"]
+
+    # GitHub scoring
+    elif source == "github":
+        reactions = int(meta.get("reactions_total", 0))
+        comments = int(meta.get("comments", 0))
+        engagement = reactions + (comments * 4)
+        state = meta.get("state", "open")
+        state_reason = meta.get("state_reason", "")
+        author_assoc = meta.get("author_association", "NONE")
+        has_stale = any("label:Stale" in t for t in tags)
+
+        has_team_label = any("label:status:in-linear" in t or "label:status:team-assigned" in t for t in tags)
+        if has_team_label or (state == "closed" and state_reason and not has_stale):
+            score += cfg["clear_signal_bonus"]
+
+        if author_assoc in ("MEMBER", "COLLABORATOR"):
+            score += cfg["author_member_bonus"]
+
+        if engagement >= cfg["high_engagement_threshold"]:
+            score += cfg["high_engagement_bonus"]
+        elif engagement >= cfg["medium_engagement_threshold"]:
+            score += cfg["medium_engagement_bonus"]
+
+    # Level
     if score >= cfg["high_threshold"]:
         level = "HIGH"
     elif score >= cfg["medium_threshold"]:
@@ -109,23 +131,47 @@ def score_result(r, cfg):
     else:
         level = "LOW"
 
+    # Reason string
     parts = []
     if source == "docs":
         parts.append("Official docs")
     elif source == "github":
         parts.append("GitHub issue")
+        for t in tags:
+            if t.startswith("label:team:"):
+                parts.append(t.replace("label:", ""))
+            elif t in ("label:status:in-linear", "label:status:team-assigned"):
+                parts.append(t.replace("label:", ""))
+        state_reason = meta.get("state_reason", "")
+        if state_reason:
+            parts.append(state_reason)
+        reactions = int(meta.get("reactions_total", 0))
+        comments = int(meta.get("comments", 0))
+        if reactions:
+            parts.append(f"{reactions} reactions")
+        if comments:
+            parts.append(f"{comments} comments")
     else:
         parts.append("Community")
+        category = ""
+        for t in tags:
+            if t.startswith("category:"):
+                category = t.replace("category:", "")
+                break
         if category:
             parts.append(category.replace("-", " "))
-    if solved:
-        parts.append("solved")
-    if votes:
-        parts.append(f"{votes} votes")
-    if likes:
-        parts.append(f"{likes} likes")
-    if views >= 100:
-        parts.append(f"{views} views")
+        solved = "outcome:solved" in tag_set
+        if solved:
+            parts.append("solved")
+        votes = int(meta.get("vote_count", 0))
+        likes = int(meta.get("like_count", 0))
+        views = int(meta.get("views", 0))
+        if votes:
+            parts.append(f"{votes} votes")
+        if likes:
+            parts.append(f"{likes} likes")
+        if views >= 100:
+            parts.append(f"{views} views")
 
     return level, ", ".join(parts), score
 
@@ -140,6 +186,70 @@ def extract_url(r):
             if m:
                 url = m.group(0).rstrip(")")
     return url
+
+
+def get_github_bucket(r):
+    """Determine resolution bucket for a GitHub issue. Returns suffix hint string."""
+    tags = r.get("tags", [])
+    meta = r.get("metadata", {}) or {}
+    tag_set = set(tags)
+    state = meta.get("state", "open")
+    state_reason = meta.get("state_reason", "")
+
+    if state == "closed" and state_reason == "completed" and "label:Stale" not in tag_set:
+        return "fixed — update n8n for the fix"
+    if state == "open" and any(t in tag_set for t in ("label:status:in-linear", "label:status:team-assigned")):
+        return "acknowledged — n8n is tracking internally"
+    if state_reason == "not_planned" or "label:closed:working-as-expected" in tag_set:
+        return "won't fix — search for workarounds"
+    if "label:closed:support-issue" in tag_set:
+        return "support issue — check docs or community"
+    if state_reason == "duplicate" or "label:closed:duplicate" in tag_set:
+        return "duplicate — search for the original issue"
+    if "label:Stale" in tag_set:
+        return "stale — no resolution, but others reported this"
+    if "label:closed:incomplete-template" in tag_set:
+        return "incomplete report — problem may be real but unconfirmed"
+    return "no resolution yet"
+
+
+def build_metadata_suffix(r, url):
+    """Build the metadata suffix line for a result. Varies by source type."""
+    tags = r.get("tags", [])
+    meta = r.get("metadata", {}) or {}
+    source = "unknown"
+    if any("source:docs" in t for t in tags):
+        source = "docs"
+    elif any("source:github" in t for t in tags):
+        source = "github"
+    elif any("source:discourse" in t for t in tags):
+        source = "community"
+
+    parts = []
+    if url:
+        parts.append(f"Source: {url}")
+
+    if source == "github":
+        bucket_hint = get_github_bucket(r)
+        parts.append(bucket_hint)
+        team_labels = [t.replace("label:", "") for t in tags if t.startswith("label:team:") or t in ("label:status:in-linear", "label:status:team-assigned")]
+        if team_labels:
+            parts.append(", ".join(team_labels))
+        reactions = meta.get("reactions_total", "0")
+        comments = meta.get("comments", "0")
+        parts.append(f"{reactions} reactions, {comments} comments")
+
+    elif source == "community":
+        solved = "outcome:solved" in set(tags)
+        parts.append("solved" if solved else "unsolved")
+        votes = meta.get("vote_count", "0")
+        likes = meta.get("like_count", "0")
+        views = meta.get("views", "0")
+        parts.append(f"{votes} votes, {likes} likes, {views} views")
+
+    if not parts:
+        return ""
+    return "   " + " | ".join(parts)
 
 
 RECALL_URL = "https://n8nhindsight.applikuapp.com/public/recall"
@@ -206,7 +316,7 @@ def format_results(response_file, project_dir=None):
         data = json.load(f)
 
     cfg = load_config(project_dir)
-    results = data.get("results", [])[:cfg["max_results"]]
+    results = data.get("results", [])
     if not results:
         return None
 
@@ -236,19 +346,26 @@ def format_results(response_file, project_dir=None):
 
     for i, (r, level, reason, _) in enumerate(filtered, 1):
         text = r.get("text", "").strip()
+        url = extract_url(r) or enriched_urls.get(i - 1, "")
+
+        # Build metadata suffix
+        if not url and (i - 1) in enrichment_failed:
+            suffix = "   Source unavailable — use manual recall to find the original"
+        else:
+            suffix = build_metadata_suffix(r, url)
+
+        # Truncation-aware: reserve space for suffix, floor 300 chars for text
         length_key = f"max_text_length_{level.lower()}"
         max_len = cfg.get(length_key, -1)
         if max_len >= 0:
             max_len = max(max_len, 300)
-        if max_len >= 0 and len(text) > max_len:
-            text = text[:max_len] + "..."
-        url = extract_url(r) or enriched_urls.get(i - 1, "")
-        if url:
-            entry = f"{i}. [{level} — {reason}] (Source: {url})\n   {text}"
-        elif (i - 1) in enrichment_failed:
-            entry = f"{i}. [{level} — {reason}] (Source unavailable — use manual recall to find the original)\n   {text}"
-        else:
-            entry = f"{i}. [{level} — {reason}] {text}"
+            text_budget = max(300, max_len - len(suffix))
+            if len(text) > text_budget:
+                text = text[:text_budget] + "..."
+
+        entry = f"{i}. [{level} — {reason}] {text}"
+        if suffix:
+            entry += f"\n{suffix}"
         lines.append(entry)
 
     lines.append("")

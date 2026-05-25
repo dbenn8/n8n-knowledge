@@ -35,7 +35,7 @@ git clone https://github.com/dbenn8/n8n-knowledge.git
 | Source | Count | Updated |
 |---|---|---|
 | Official docs (docs.n8n.io) | 315 pages | Nightly |
-| GitHub issues & PRs | 1,000+ | Nightly |
+| GitHub issues & PRs | 4,500+ | Nightly |
 | Community questions | 35,000+ | Nightly |
 | Feature requests (with vote counts) | 2,600+ | Nightly |
 | Built with n8n examples | 1,100+ | Nightly |
@@ -53,7 +53,7 @@ git clone https://github.com/dbenn8/n8n-knowledge.git
 
 ### Scoring tuning (optional)
 
-Each auto-recalled result gets a confidence score based on its source type and community engagement. You can tune the scoring per project by creating `.claude/n8n-knowledge.local.md`. All fields are optional — only override what you want to change.
+Each auto-recalled result gets a confidence score based on its source type, engagement metrics, and resolution signals. You can tune the scoring per project by creating `.claude/n8n-knowledge.local.md`. All fields are optional — only override what you want to change.
 
 ```markdown
 ---
@@ -65,12 +65,18 @@ medium_threshold: 50
 
 # Base scores by source type (starting score before bonuses)
 docs_base: 80
-github_base: 60
+github_base: 49
 community_base: 40
 
-# Engagement bonuses (added when results have community signals)
+# GitHub-specific bonuses
+clear_signal_bonus: 25       # closed with state_reason (not stale) OR open with team label
+author_member_bonus: 5        # author is MEMBER or COLLABORATOR
+
+# Community engagement bonuses
 solved_bonus: 25              # community post has an accepted answer
-high_engagement_threshold: 10 # votes + likes >= this to earn the high bonus
+
+# Engagement bonuses (GitHub: reactions + comments*4, Community: votes + likes)
+high_engagement_threshold: 10 # engagement >= this to earn the high bonus
 high_engagement_bonus: 20
 medium_engagement_threshold: 3
 medium_engagement_bonus: 10
