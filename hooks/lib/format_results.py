@@ -174,16 +174,19 @@ def enrich_url(text):
 
 
 def enrich_missing_urls(filtered):
-    """Concurrently enrich consolidated results that lack source URLs."""
+    """Concurrently enrich consolidated results that lack source URLs.
+    Returns (url_map, failed_indices) — failed_indices are results that
+    needed enrichment but timed out or returned nothing."""
     needs_enrichment = []
     for i, (r, level, reason, sc) in enumerate(filtered):
         if not extract_url(r) and r.get("type") in ("observation",):
             needs_enrichment.append((i, r.get("text", "")))
 
     if not needs_enrichment:
-        return {}
+        return {}, set()
 
     url_map = {}
+    attempted = {idx for idx, _ in needs_enrichment}
     with ThreadPoolExecutor(max_workers=len(needs_enrichment)) as pool:
         futures = {pool.submit(enrich_url, text): idx for idx, text in needs_enrichment}
         for future in as_completed(futures, timeout=ENRICH_TIMEOUT + 0.5):
@@ -194,7 +197,8 @@ def enrich_missing_urls(filtered):
                     url_map[idx] = url
             except Exception:
                 pass
-    return url_map
+    failed = attempted - set(url_map.keys())
+    return url_map, failed
 
 
 def format_results(response_file, project_dir=None):
@@ -228,7 +232,7 @@ def format_results(response_file, project_dir=None):
         "",
     ]
 
-    enriched_urls = enrich_missing_urls(filtered)
+    enriched_urls, enrichment_failed = enrich_missing_urls(filtered)
 
     for i, (r, level, reason, _) in enumerate(filtered, 1):
         text = r.get("text", "").strip()
@@ -241,6 +245,8 @@ def format_results(response_file, project_dir=None):
         url = extract_url(r) or enriched_urls.get(i - 1, "")
         if url:
             entry = f"{i}. [{level} — {reason}] (Source: {url})\n   {text}"
+        elif (i - 1) in enrichment_failed:
+            entry = f"{i}. [{level} — {reason}] (Source unavailable — use manual recall to find the original)\n   {text}"
         else:
             entry = f"{i}. [{level} — {reason}] {text}"
         lines.append(entry)
