@@ -3,8 +3,6 @@
 import json
 import re
 import sys
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DEFAULTS = {
     "high_threshold": 70,
@@ -252,63 +250,29 @@ def build_metadata_suffix(r, url):
     return "   " + " | ".join(parts)
 
 
-RECALL_URL = "https://n8nhindsight.applikuapp.com/public/recall"
-ENRICH_TIMEOUT = 4
+def resolve_source_urls(r, source_facts, limit=3):
+    """Resolve a result's source_fact_ids to deduped source post URLs.
 
-
-def enrich_url(text):
-    """Follow-up recall to find source URL for a consolidated memory."""
-    try:
-        query = text[:200]
-        payload = json.dumps({"query": query, "budget": "low", "max_tokens": 500}).encode()
-        req = urllib.request.Request(
-            RECALL_URL, data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=ENRICH_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-        for r in data.get("results", []):
-            if r.get("type") in ("world", "experience"):
-                url = (r.get("metadata") or {}).get("url", "")
-                if not url:
-                    ctx = r.get("context", "")
-                    m = re.search(r"https?://\S+\)?", ctx)
-                    if m:
-                        url = m.group(0).rstrip(")")
-                if url:
-                    return url
-    except Exception:
-        pass
-    return ""
-
-
-def enrich_missing_urls(filtered):
-    """Concurrently enrich consolidated results that lack source URLs.
-    Returns (url_map, failed_indices) — failed_indices are results that
-    needed enrichment but timed out or returned nothing."""
-    needs_enrichment = []
-    for i, (r, level, reason, sc) in enumerate(filtered):
-        if not extract_url(r) and r.get("type") in ("observation",):
-            needs_enrichment.append((i, r.get("text", "")))
-
-    if not needs_enrichment:
-        return {}, set()
-
-    url_map = {}
-    attempted = {idx for idx, _ in needs_enrichment}
-    with ThreadPoolExecutor(max_workers=len(needs_enrichment)) as pool:
-        futures = {pool.submit(enrich_url, text): idx for idx, text in needs_enrichment}
-        for future in as_completed(futures, timeout=ENRICH_TIMEOUT + 0.5):
-            idx = futures[future]
-            try:
-                url = future.result()
-                if url:
-                    url_map[idx] = url
-            except Exception:
-                pass
-    failed = attempted - set(url_map.keys())
-    return url_map, failed
+    Synthesized observations carry empty metadata but list the source_fact_ids
+    of the raw memories they were built from. Those raw facts (returned in the
+    recall's top-level source_facts when include.source_facts is requested) hold
+    the correct per-post url/topic_id. This replaces the old second-call
+    enrich_url() fallback with exact source tracing from the same response."""
+    urls = []
+    for fid in r.get("source_fact_ids") or []:
+        fact = source_facts.get(fid) or {}
+        furl = (fact.get("metadata") or {}).get("url")
+        if not furl:
+            ctx = fact.get("context", "")
+            if ctx:
+                m = re.search(r"https?://\S+\)?", ctx)
+                if m:
+                    furl = m.group(0).rstrip(")")
+        if furl and furl not in urls:
+            urls.append(furl)
+        if len(urls) >= limit:
+            break
+    return urls
 
 
 def format_results(response_file, project_dir=None):
@@ -342,17 +306,25 @@ def format_results(response_file, project_dir=None):
         "",
     ]
 
-    enriched_urls, enrichment_failed = enrich_missing_urls(filtered)
+    source_facts = data.get("source_facts") or {}
 
     for i, (r, level, reason, _) in enumerate(filtered, 1):
         text = r.get("text", "").strip()
-        url = extract_url(r) or enriched_urls.get(i - 1, "")
+        url = extract_url(r)
+        source_urls = []
+        if not url:
+            # Observation: trace its source posts via source_fact_ids (same response).
+            source_urls = resolve_source_urls(r, source_facts)
+            url = source_urls[0] if source_urls else ""
 
         # Build metadata suffix
-        if not url and (i - 1) in enrichment_failed:
+        if not url:
             suffix = "   Source unavailable — use manual recall to find the original"
         else:
             suffix = build_metadata_suffix(r, url)
+            # Observation synthesized from multiple posts: cite the extra sources too.
+            if len(source_urls) > 1:
+                suffix += " | also: " + ", ".join(source_urls[1:])
 
         # Truncation-aware: reserve space for suffix, floor 300 chars for text
         length_key = f"max_text_length_{level.lower()}"

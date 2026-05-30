@@ -8,7 +8,7 @@ do_recall() {
   local budget="${2:-low}"
   curl -s -X POST "$RECALL_URL" \
     -H "Content-Type: application/json" \
-    -d "$(printf '{"query": %s, "budget": "%s", "max_tokens": 3000}' "$(printf '%s' "$query" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" "$budget")"
+    -d "$(printf '{"query": %s, "budget": "%s", "max_tokens": 3000, "include": {"source_facts": {}}}' "$(printf '%s' "$query" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" "$budget")"
 }
 
 format_recall_results() {
