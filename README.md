@@ -51,6 +51,42 @@ git clone https://github.com/dbenn8/n8n-knowledge.git
 | `enableAutoRecall` | `true` | Auto-recall on every message. Disable for manual-only (saves tokens). |
 | `showRecallResults` | `true` | When enabled, Claude cites the knowledge base as a source in its responses. When disabled, Claude uses the context silently. Note: raw injected context is only visible in the conversation transcript, not in the chat UI. |
 
+### Backstop recall (mid-turn context)
+
+Auto-recall only fires on **your** message (the `UserPromptSubmit` hook). But a long agentic turn drifts: by the time Claude has read files, edited code, and spun up subagents, the original recall context may be stale or about a different topic than what it's now working on.
+
+Backstop recall fills that gap by refreshing n8n knowledge-base context **during** the agent's reasoning turn:
+
+- **After `Edit`/`Write`/`Task` tool calls** — a `PostToolUse` hook inspects what Claude just wrote, extracts a fresh-keyword-anchored query, and injects a new `<result>` block as `additionalContext`. Topics already covered this session are skipped, and recalls are capped per session so it stays quiet once Claude has what it needs.
+- **Into `Task` subagents** — an optional `PreToolUse` hook can prepend the recalled context directly into a subagent's prompt so dispatched agents start with the relevant n8n knowledge. This is **off by default** (experimental).
+
+It complements auto-recall rather than replacing it: auto-recall covers the user's question, backstop recall covers where the work actually goes.
+
+#### Options
+
+| Setting | Default | Description |
+|---|---|---|
+| `enableBackstopRecall` | `true` | Refresh n8n context during agent reasoning (after Edit/Write/Task). Disable to save tokens. |
+| `backstopRecallCap` | `4` | Max backstop recalls per session. |
+| `backstopRecallMaxTokens` | `8000` | Returned-context size cap per backstop recall. |
+| `backstopRecallBudget` | `high` | Hindsight recall effort: `low`, `mid`, or `high`. |
+| `enableSubagentInjection` | `false` | Prepend n8n context into Task subagent prompts (experimental). |
+| `triggerKeywords` | `""` (defaults) | Comma-separated broad keywords that trigger recall inside n8n codebases. See below. |
+
+#### Trigger keywords and the `DEFAULTS` sentinel
+
+Inside an n8n codebase, recall fires on a set of broad keywords (in consumer repos, only the explicit token `n8n` triggers it). The current built-in default list is:
+
+```
+workflow, node, trigger, webhook, credential, expression, execution
+```
+
+`triggerKeywords` lets you customize this list. The special token `DEFAULTS` expands inline to the built-in list above, so you can extend it without retyping every keyword:
+
+- **Extend** — `DEFAULTS, mynode` → the built-ins **plus** `mynode`.
+- **Replace** — `workflow, node, mything` → exactly these three; the rest of the built-ins are dropped.
+- **Reset** — leave the field blank (or include `DEFAULTS`) to use the built-in list.
+
 ### Scoring tuning (optional)
 
 Each auto-recalled result gets a confidence score based on its source type, engagement metrics, and resolution signals. You can tune the scoring per project by creating `.claude/n8n-knowledge.local.md`. All fields are optional — only override what you want to change.
