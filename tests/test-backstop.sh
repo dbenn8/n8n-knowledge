@@ -90,5 +90,25 @@ print('ok')
 ")
 assert_eq "query_window logic" "ok" "$qw"
 
+# Task 8: PostToolUse orchestrator end-to-end (recall mocked via fixture).
+export RECALL_CLI_TEST=1
+export RECALL_FIXTURE="$SCRIPT_DIR/fixtures/recall-with-source-facts.json"
+SID="backstop-test-$$"
+rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID}.json"
+mk(){ python3 -c "import json,sys; print(json.dumps({'session_id':'$SID','cwd':'$SCRIPT_DIR','tool_name':sys.argv[1],'tool_input':json.loads(sys.argv[2])}))" "$1" "$2"; }
+
+# First Edit touching n8n -> should inject (n8n keyword present so should_recall passes)
+out1=$(echo "$(mk Edit '{"file_path":"x.js","new_string":"set up an n8n webhook node here"}')" | bash "$SCRIPT_DIR/../hooks/backstop-recall.sh")
+assert_contains "first edit injects result" "<result" "$out1"
+assert_contains "output is PostToolUse" '"hookEventName": "PostToolUse"' "$out1"
+# Immediate repeat same topic -> skip (no new/stale topic)
+out2=$(echo "$(mk Edit '{"file_path":"x.js","new_string":"another n8n webhook tweak"}')" | bash "$SCRIPT_DIR/../hooks/backstop-recall.sh")
+assert_eq "repeat topic injects nothing" "" "$out2"
+# Non-trigger tool -> nothing, but counts
+out3=$(echo "$(mk Read '{"file_path":"x.js"}')" | bash "$SCRIPT_DIR/../hooks/backstop-recall.sh")
+assert_eq "read tool injects nothing" "" "$out3"
+unset RECALL_CLI_TEST RECALL_FIXTURE
+rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID}.json"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
