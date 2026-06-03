@@ -294,6 +294,48 @@ def build_metadata_suffix(r, url, eng=None):
     return "   " + " | ".join(parts)
 
 
+SYNTHESIS_NOTE = (
+    "note: machine-distilled — verify against the sources above; prefer them on "
+    "conflict; fetch a source URL for the full thread (what was tried, what worked, why)."
+)
+
+
+def render_result(n, r, level, obs, sf_pairs, cfg):
+    """Render one result as a <result>…</result> block with prose interior."""
+    text = (r.get("text") or "").strip()
+    length_key = f"max_text_length_{level.lower()}"
+    max_len = cfg.get(length_key, -1)
+    if max_len >= 0:
+        max_len = max(max_len, 300)
+        if len(text) > max_len:
+            text = text[:max_len] + "..."
+
+    if obs:
+        if sf_pairs:
+            purl, pfact = sf_pairs[0]
+            desc = engagement_descriptor(pfact.get("metadata") or {}, pfact.get("tags") or [])
+            primary = f"{purl} ({desc})" if desc else purl
+            src_line = "sources: " + primary
+            extras = [u for u, _ in sf_pairs[1:]]
+            if extras:
+                src_line += " | also: " + ", ".join(extras)
+        else:
+            src_line = "sources: unavailable — use manual recall to find the original"
+        open_tag = f'<result n="{n}" kind="synthesis" confidence="{level}" sources="{len(sf_pairs)}">'
+        interior = "\n".join([text, src_line, SYNTHESIS_NOTE])
+    else:
+        source = detect_source(r.get("tags") or [])
+        url = extract_url(r)
+        if url:
+            suffix = build_metadata_suffix(r, url).strip()
+        else:
+            suffix = "source unavailable — use manual recall to find the original"
+        open_tag = f'<result n="{n}" kind="post" confidence="{level}" source="{source}">'
+        interior = "\n".join([text, suffix])
+
+    return f"{open_tag}\n{interior}\n</result>"
+
+
 def resolve_source_urls(r, source_facts, limit=3):
     """Resolve a result's source_fact_ids to deduped source post URLs.
 
