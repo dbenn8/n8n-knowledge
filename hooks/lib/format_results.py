@@ -60,10 +60,47 @@ def load_config(project_dir):
     return config
 
 
-def score_result(r, cfg):
-    """Score a single recall result. Returns (level, reason, score)."""
-    tags = r.get("tags", [])
-    meta = r.get("metadata", {}) or {}
+def detect_source(tags):
+    if any("source:docs" in t for t in tags):
+        return "docs"
+    if any("source:github" in t for t in tags):
+        return "github"
+    if any("source:discourse" in t for t in tags):
+        return "community"
+    return "unknown"
+
+
+def is_observation(r):
+    """A synthesized observation carries type 'observation' and empty own metadata."""
+    return r.get("type") == "observation"
+
+
+def engagement_descriptor(meta, tags):
+    """Compact 'solved, 13 likes, 3062 views'-style descriptor for one source post."""
+    tag_set = set(tags)
+    parts = []
+    if "outcome:solved" in tag_set or meta.get("has_accepted_answer") == "True":
+        parts.append("solved")
+    for key, label in (("vote_count", "votes"), ("like_count", "likes"),
+                       ("reactions_total", "reactions"), ("comments", "comments")):
+        v = meta.get(key)
+        if v and str(v) != "0":
+            parts.append(f"{v} {label}")
+    v = meta.get("views")
+    if v and str(v) != "0":
+        parts.append(f"{v} views")
+    return ", ".join(parts)
+
+
+def score_result(r, cfg, eng=None):
+    """Score a single recall result. Returns (level, reason, score).
+
+    For synthesized observations (empty own metadata), pass eng = the primary
+    source fact so the score reflects the source thread's engagement instead of
+    the observation's empty metadata."""
+    src = eng if eng else r
+    tags = src.get("tags", [])
+    meta = src.get("metadata", {}) or {}
     tag_set = set(tags)
 
     source = "unknown"
