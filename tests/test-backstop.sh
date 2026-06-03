@@ -20,5 +20,14 @@ assert_contains "do_recall sends budget high" '"budget": "high"' "$payload"
 assert_contains "do_recall sends max_tokens 8000" '"max_tokens": 8000' "$payload"
 assert_contains "do_recall keeps source_facts" '"source_facts"' "$payload"
 
+# Task 2: format_results.py supports --event and --bare.
+FIX="$SCRIPT_DIR/fixtures/recall-with-source-facts.json"
+bare=$(python3 "$LIB_DIR/format_results.py" "$FIX" --bare 2>/dev/null)
+assert_contains "bare mode emits <result> tags" "<result" "$bare"
+assert_contains "bare mode omits hook json wrapper" "n8n Knowledge Base" "$bare"
+case "$bare" in *hookSpecificOutput*) echo "  FAIL: bare should not wrap in hook json"; FAIL=$((FAIL+1));; *) echo "  PASS: bare has no hook json"; PASS=$((PASS+1));; esac
+evt=$(python3 "$LIB_DIR/format_results.py" "$FIX" --event PostToolUse 2>/dev/null)
+assert_contains "event arg sets PostToolUse" '"hookEventName": "PostToolUse"' "$evt"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1

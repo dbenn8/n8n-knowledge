@@ -419,17 +419,28 @@ def format_results(response_file, project_dir=None):
 def main():
     if len(sys.argv) < 2:
         sys.exit(1)
-
-    response_file = sys.argv[1]
-    project_dir = sys.argv[2] if len(sys.argv) > 2 else None
+    args = sys.argv[1:]
+    bare = "--bare" in args
+    event = "UserPromptSubmit"
+    if "--event" in args:
+        i = args.index("--event")
+        if i + 1 < len(args):
+            event = args[i + 1]
+    positional = [a for a in args if not a.startswith("--") and a not in (event,)]
+    response_file = positional[0]
+    project_dir = positional[1] if len(positional) > 1 else None
 
     context = format_results(response_file, project_dir)
     if not context:
         sys.exit(0)
 
+    if bare:
+        print(context)
+        return
+
     output = {
         "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
+            "hookEventName": event,
             "additionalContext": context,
         }
     }
