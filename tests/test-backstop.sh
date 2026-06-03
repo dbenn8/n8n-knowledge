@@ -64,5 +64,31 @@ print('ok')
 ")
 assert_eq "backstop_state logic" "ok" "$st"
 
+# Task 7: query windowing anchors on first fresh keyword, sentence-aligned.
+qw=$(python3 -c "
+import sys; sys.path.insert(0,'$LIB_DIR')
+import query_window as q
+kws='workflow node trigger webhook credential expression execution'.split()
+# all-fresh: window starts at 0
+content='First we set up a webhook. Then more text.'
+query,sig,more = q.window_query(content, kws, covered=set(), char_budget=1600)
+assert query.startswith('First we set up a webhook'), query
+assert 'webhook' in sig and more is False
+# stale-before-fresh: 'workflow' covered, 'webhook' fresh later -> anchor at sentence with webhook
+content2='Configure the workflow first. Now add a webhook trigger here.'
+query2,sig2,more2 = q.window_query(content2, kws, covered={'workflow'}, char_budget=1600)
+assert query2.startswith('Now add a webhook'), query2
+assert 'webhook' in sig2
+# no fresh keyword -> empty
+query3,sig3,more3 = q.window_query('just a workflow only', kws, covered={'workflow'}, char_budget=1600)
+assert query3=='' and sig3==[]
+# more_fresh_after: fresh keyword beyond the budget window
+content4='webhook ' + ('x'*1700) + ' credential'
+query4,sig4,more4 = q.window_query(content4, kws, covered=set(), char_budget=1600)
+assert more4 is True
+print('ok')
+")
+assert_eq "query_window logic" "ok" "$qw"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
