@@ -34,5 +34,15 @@ cli=$(RECALL_CLI_TEST=1 RECALL_FIXTURE="$SCRIPT_DIR/fixtures/recall-with-source-
 assert_contains "recall-cli emits <result>" "<result" "$cli"
 assert_contains "recall-cli has no hook json" "n8n Knowledge Base" "$cli"
 
+# Task 5: trigger keywords configurable, DEFAULTS sentinel.
+r1=$(CLAUDE_PLUGIN_OPTION_triggerKeywords="DEFAULTS, gizmo" bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
+assert_contains "DEFAULTS expands to built-ins" "workflow" "$r1"
+assert_contains "DEFAULTS keeps additions" "gizmo" "$r1"
+r2=$(CLAUDE_PLUGIN_OPTION_triggerKeywords="alpha, beta" bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
+assert_contains "replace mode keeps custom" "alpha" "$r2"
+case "$r2" in *workflow*) echo "  FAIL: replace mode should drop defaults"; FAIL=$((FAIL+1));; *) echo "  PASS: replace drops defaults"; PASS=$((PASS+1));; esac
+r3=$(bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
+assert_contains "unset uses defaults" "webhook" "$r3"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
