@@ -29,5 +29,10 @@ case "$bare" in *hookSpecificOutput*) echo "  FAIL: bare should not wrap in hook
 evt=$(python3 "$LIB_DIR/format_results.py" "$FIX" --event PostToolUse 2>/dev/null)
 assert_contains "event arg sets PostToolUse" '"hookEventName": "PostToolUse"' "$evt"
 
+# Task 3: recall-cli.sh returns a bare <result> block (mock do_recall to fixture).
+cli=$(RECALL_CLI_TEST=1 RECALL_FIXTURE="$SCRIPT_DIR/fixtures/recall-with-source-facts.json" bash "$LIB_DIR/recall-cli.sh" "connect Claude Desktop n8n MCP" high 8000 2>/dev/null)
+assert_contains "recall-cli emits <result>" "<result" "$cli"
+assert_contains "recall-cli has no hook json" "n8n Knowledge Base" "$cli"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
