@@ -211,10 +211,17 @@ def get_github_bucket(r):
     return "no resolution yet"
 
 
-def build_metadata_suffix(r, url):
-    """Build the metadata suffix line for a result. Varies by source type."""
-    tags = r.get("tags", [])
-    meta = r.get("metadata", {}) or {}
+def build_metadata_suffix(r, url, eng=None):
+    """Build the metadata suffix line for a result. Varies by source type.
+
+    eng: optional source-fact dict (with its own tags/metadata). When a result
+    is a synthesized observation (empty own metadata), pass its primary source
+    fact here so the engagement/solved/state shown belongs to the cited source
+    post — otherwise observations would display 0 votes/0 likes/0 views even
+    though the underlying source memory carries real numbers."""
+    src = eng if eng else r
+    tags = src.get("tags", []) or []
+    meta = src.get("metadata", {}) or {}
     source = "unknown"
     if any("source:docs" in t for t in tags):
         source = "docs"
@@ -228,7 +235,7 @@ def build_metadata_suffix(r, url):
         parts.append(f"Source: {url}")
 
     if source == "github":
-        bucket_hint = get_github_bucket(r)
+        bucket_hint = get_github_bucket(src)
         parts.append(bucket_hint)
         team_labels = [t.replace("label:", "") for t in tags if t.startswith("label:team:") or t in ("label:status:in-linear", "label:status:team-assigned")]
         if team_labels:
@@ -258,7 +265,15 @@ def resolve_source_urls(r, source_facts, limit=3):
     recall's top-level source_facts when include.source_facts is requested) hold
     the correct per-post url/topic_id. This replaces the old second-call
     enrich_url() fallback with exact source tracing from the same response."""
-    urls = []
+    return [u for u, _ in resolve_source_facts(r, source_facts, limit)]
+
+
+def resolve_source_facts(r, source_facts, limit=3):
+    """Like resolve_source_urls, but returns (url, fact) pairs so callers can
+    also surface the source post's engagement metadata (views/votes/likes/
+    comments/solved), not just its URL. Deduped by URL, source order preserved."""
+    out = []
+    seen = set()
     for fid in r.get("source_fact_ids") or []:
         fact = source_facts.get(fid) or {}
         furl = (fact.get("metadata") or {}).get("url")
@@ -268,11 +283,12 @@ def resolve_source_urls(r, source_facts, limit=3):
                 m = re.search(r"https?://\S+\)?", ctx)
                 if m:
                     furl = m.group(0).rstrip(")")
-        if furl and furl not in urls:
-            urls.append(furl)
-        if len(urls) >= limit:
+        if furl and furl not in seen:
+            seen.add(furl)
+            out.append((furl, fact))
+        if len(out) >= limit:
             break
-    return urls
+    return out
 
 
 def format_results(response_file, project_dir=None):
@@ -312,16 +328,21 @@ def format_results(response_file, project_dir=None):
         text = r.get("text", "").strip()
         url = extract_url(r)
         source_urls = []
+        primary_fact = None
         if not url:
             # Observation: trace its source posts via source_fact_ids (same response).
-            source_urls = resolve_source_urls(r, source_facts)
+            sf_pairs = resolve_source_facts(r, source_facts)
+            source_urls = [u for u, _ in sf_pairs]
             url = source_urls[0] if source_urls else ""
+            # Surface the cited source post's engagement, not the observation's
+            # own (empty) metadata.
+            primary_fact = sf_pairs[0][1] if sf_pairs else None
 
         # Build metadata suffix
         if not url:
             suffix = "   Source unavailable — use manual recall to find the original"
         else:
-            suffix = build_metadata_suffix(r, url)
+            suffix = build_metadata_suffix(r, url, eng=primary_fact)
             # Observation synthesized from multiple posts: cite the extra sources too.
             if len(source_urls) > 1:
                 suffix += " | also: " + ", ".join(source_urls[1:])
