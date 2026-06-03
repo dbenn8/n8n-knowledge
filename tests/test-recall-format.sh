@@ -51,6 +51,17 @@ assert_valid_json() {
   fi
 }
 
+confidence_of() { # $1=context  $2=text fragment
+  python3 -c "
+import sys, re
+ctx, frag = sys.argv[1], sys.argv[2]
+for block in re.findall(r'<result\b.*?</result>', ctx, re.S):
+    if frag in block:
+        m = re.search(r'confidence=\"(\w+)\"', block)
+        print(m.group(1) if m else ''); break
+" "$1" "$2"
+}
+
 echo "=== recall format tests ==="
 
 FIXTURE="$SCRIPT_DIR/fixtures/recall-response.json"
@@ -64,16 +75,17 @@ assert_contains "has knowledge base header" "n8n Knowledge Base" "$context"
 assert_contains "has confidence legend" "HIGH = official docs" "$context"
 
 # Docs should score HIGH (base 80)
-assert_contains "docs result is HIGH" "HIGH.*Official docs" "$context"
+assert_eq "docs result is HIGH" "HIGH" "$(confidence_of "$context" "docker-com")"
 
 # GitHub with in-linear + team:ai + 15 reactions + 8 comments (49+25+5+20=99 engagement=15+32=47) = HIGH
-assert_contains "github with in-linear is HIGH" "HIGH.*GitHub issue.*team:ai" "$context"
+assert_eq "github with in-linear is HIGH" "HIGH" "$(confidence_of "$context" "discards incoming request headers")"
+assert_contains "github in-linear shows team:ai" "team:ai" "$context"
 
 # Solved community with some engagement should score MEDIUM or higher
 assert_contains "solved community has solved label" "solved" "$context"
 
 # Built-with-n8n with high engagement (22 likes, 8 votes, 1200 views) should NOT be LOW
-assert_not_contains "high-engagement built-with is not LOW" "LOW.*built with n8n" "$context"
+assert_not_contains "high-engagement built-with is not LOW" "LOW" "$(confidence_of "$context" "automated invoice processing")"
 
 # Low-engagement unsolved community gets filtered out (max_low_results=1, github LOW scores higher)
 assert_not_contains "low-engagement community filtered by max_low_results" "connect n8n to their local database" "$context"
@@ -83,13 +95,13 @@ assert_contains "has docs URL" "docs.n8n.io" "$context"
 assert_contains "has github URL" "github.com" "$context"
 
 # GitHub no-signal issue (hhh: base 49, no bonuses) should be LOW
-assert_contains "github no signals is LOW" "LOW.*GitHub issue" "$context"
+assert_eq "github no signals is LOW" "LOW" "$(confidence_of "$context" "zero engagement")"
 
 # Stale github (fff: closed+completed BUT has Stale label = no clear_signal_bonus, base 49 + medium engagement 1+8=9 < 10 so no bonus = 49) = LOW
 assert_contains "stale github shows stale hint" "stale.*no resolution" "$context"
 
 # GitHub closed not_planned with MEMBER author (ggg: 49+25+5+10=89) = HIGH
-assert_contains "not_planned member is HIGH" "HIGH.*GitHub issue.*not_planned" "$context"
+assert_eq "not_planned member is HIGH" "HIGH" "$(confidence_of "$context" "not planned for current archit")"
 
 # Resolution bucket hints
 assert_contains "acknowledged hint in suffix" "acknowledged" "$context"
@@ -112,36 +124,10 @@ empty_result=$(python3 "$LIB_DIR/format_results.py" "/tmp/empty-recall.json" 2>/
 assert_eq "empty results returns empty string" "" "${empty_result:-}"
 rm /tmp/empty-recall.json
 
-# Consolidated result enrichment — success case (mock enrichment to return a URL)
+# Consolidated observation: source URL traced from source_facts (no second call).
 CONSOLIDATED_FIXTURE="$SCRIPT_DIR/fixtures/recall-response-consolidated.json"
-enrichment_success=$(python3 -c "
-import sys
-sys.path.insert(0, '$LIB_DIR')
-import format_results as fr
-# Patch enrich_missing_urls to simulate successful enrichment
-original = fr.enrich_missing_urls
-fr.enrich_missing_urls = lambda filtered: ({1: 'https://github.com/n8n-io/n8n/issues/30926'}, set())
-result = fr.format_results('$CONSOLIDATED_FIXTURE')
-fr.enrich_missing_urls = original
-print(result)
-" 2>/dev/null) || true
-assert_contains "enrichment success shows source URL" "Source: https://github.com/n8n-io/n8n/issues/30926" "$enrichment_success"
-assert_not_contains "enrichment success has no unavailable message" "Source unavailable" "$enrichment_success"
-
-# Consolidated result enrichment — timeout case (mock enrichment to return nothing)
-enrichment_timeout=$(python3 -c "
-import sys
-sys.path.insert(0, '$LIB_DIR')
-import format_results as fr
-# Patch enrich_missing_urls to simulate timeout (no URL found, index 0 failed)
-original = fr.enrich_missing_urls
-fr.enrich_missing_urls = lambda filtered: ({}, {1})
-result = fr.format_results('$CONSOLIDATED_FIXTURE')
-fr.enrich_missing_urls = original
-print(result)
-" 2>/dev/null) || true
-assert_contains "enrichment timeout shows unavailable hint" "Source unavailable" "$enrichment_timeout"
-assert_contains "enrichment timeout suggests manual recall" "manual recall" "$enrichment_timeout"
+consolidated=$(python3 "$LIB_DIR/format_results.py" "$CONSOLIDATED_FIXTURE" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['hookSpecificOutput']['additionalContext'])" 2>/dev/null) || true
+assert_contains "consolidated output uses result tags" "<result" "$consolidated"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
