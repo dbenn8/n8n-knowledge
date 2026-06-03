@@ -119,5 +119,20 @@ assert_contains "config enableBackstopRecall" "enableBackstopRecall" "$pj"
 assert_contains "config backstopRecallMaxTokens" "backstopRecallMaxTokens" "$pj"
 assert_contains "config triggerKeywords" "triggerKeywords" "$pj"
 
+# Task 10: subagent injection gated; when enabled, prepends block to prompt.
+export RECALL_CLI_TEST=1
+export RECALL_FIXTURE="$SCRIPT_DIR/fixtures/recall-with-source-facts.json"
+SID2="backstop-sub-$$"; rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID2}.json"
+payload=$(python3 -c "import json;print(json.dumps({'session_id':'$SID2','cwd':'$SCRIPT_DIR','tool_name':'Task','tool_input':{'description':'n8n','prompt':'build an n8n webhook workflow'}}))")
+# disabled (default) -> no updatedInput
+off=$(echo "$payload" | bash "$SCRIPT_DIR/../hooks/backstop-subagent.sh")
+assert_eq "subagent injection off by default" "" "$off"
+# enabled -> updatedInput.prompt prefixed with <result>
+on=$(echo "$payload" | CLAUDE_PLUGIN_OPTION_enableSubagentInjection=true bash "$SCRIPT_DIR/../hooks/backstop-subagent.sh")
+assert_contains "enabled returns updatedInput" "updatedInput" "$on"
+assert_contains "updatedInput carries result block" "<result" "$on"
+unset RECALL_CLI_TEST RECALL_FIXTURE
+rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID2}.json"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
