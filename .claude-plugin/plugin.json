@@ -19,6 +19,12 @@
       "title": "Show Recall Results",
       "description": "When enabled, Claude cites the knowledge base as a source in its responses. When disabled, Claude uses the context silently without mentioning where the information came from. Note: the raw injected context is only visible in the conversation transcript, not in the chat UI.",
       "default": true
-    }
+    },
+    "enableBackstopRecall": { "type": "boolean", "title": "Enable Backstop Recall", "description": "Refresh n8n context during agent reasoning (after Edit/Write/Task). Disable to save tokens.", "default": true },
+    "backstopRecallCap": { "type": "number", "title": "Backstop Recall Cap", "description": "Max backstop recalls per session.", "default": 4 },
+    "backstopRecallMaxTokens": { "type": "number", "title": "Backstop Recall Max Tokens", "description": "Returned-context size cap per backstop recall.", "default": 8000 },
+    "backstopRecallBudget": { "type": "string", "title": "Backstop Recall Budget", "description": "Hindsight recall effort: low, mid, or high.", "default": "high" },
+    "enableSubagentInjection": { "type": "boolean", "title": "Inject Context Into Subagents", "description": "Prepend n8n context into Task subagent prompts (experimental).", "default": false },
+    "triggerKeywords": { "type": "string", "title": "Trigger Keywords", "description": "Comma list of broad n8n trigger keywords used in n8n codebases. Use the token DEFAULTS to include the built-ins (workflow, node, trigger, webhook, credential, expression, execution). Example: 'DEFAULTS, mynode'. Leave blank for defaults.", "default": "" }
   }
 }

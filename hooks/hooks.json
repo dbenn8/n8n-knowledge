@@ -2,15 +2,13 @@
   "version": 1,
   "hooks": {
     "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-recall.sh\"",
-            "timeout": 10
-          }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-recall.sh\"", "timeout": 10 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/backstop-recall.sh\"", "timeout": 8 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Task", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/backstop-subagent.sh\"", "timeout": 8 } ] }
     ]
   }
 }

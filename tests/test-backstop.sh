@@ -110,5 +110,14 @@ assert_eq "read tool injects nothing" "" "$out3"
 unset RECALL_CLI_TEST RECALL_FIXTURE
 rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID}.json"
 
+# Task 9: registration + config present.
+hj=$(cat "$SCRIPT_DIR/../hooks/hooks.json")
+assert_contains "PostToolUse registered" "PostToolUse" "$hj"
+assert_contains "backstop-recall registered" "backstop-recall.sh" "$hj"
+pj=$(cat "$SCRIPT_DIR/../.claude-plugin/plugin.json")
+assert_contains "config enableBackstopRecall" "enableBackstopRecall" "$pj"
+assert_contains "config backstopRecallMaxTokens" "backstopRecallMaxTokens" "$pj"
+assert_contains "config triggerKeywords" "triggerKeywords" "$pj"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
