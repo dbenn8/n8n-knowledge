@@ -44,5 +44,25 @@ case "$r2" in *workflow*) echo "  FAIL: replace mode should drop defaults"; FAIL
 r3=$(bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
 assert_contains "unset uses defaults" "webhook" "$r3"
 
+# Task 6: state load/save + staleness + decide.
+st=$(python3 -c "
+import sys; sys.path.insert(0,'$LIB_DIR')
+import backstop_state as s
+state = s.new_state()
+assert state['total_calls']==0 and state['topics']=={}
+# stale: recorded at total=0,trigger=0; now total=16 -> stale by total
+assert s.is_stale({'at_total':0,'at_trigger':0}, 16, 0) is True
+assert s.is_stale({'at_total':0,'at_trigger':0}, 10, 6) is True   # stale by trigger
+assert s.is_stale({'at_total':0,'at_trigger':0}, 10, 4) is False  # fresh
+# decide: new signature fires under cap
+state['recalls_done']=0
+assert s.decide(state, ['webhook'], cap=4) is True
+# at cap -> no fire
+state['recalls_done']=4
+assert s.decide(state, ['webhook'], cap=4) is False
+print('ok')
+")
+assert_eq "backstop_state logic" "ok" "$st"
+
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
