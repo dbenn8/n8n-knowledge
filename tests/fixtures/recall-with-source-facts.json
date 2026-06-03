@@ -1,0 +1,35 @@
+{
+  "results": [
+    {
+      "type": "observation",
+      "text": "MCP Server on n8n Cloud failing to connect from Claude Desktop is most often caused by gzipped responses or an OAuth-vs-access-token mismatch; disabling gzip resolves it.",
+      "tags": ["type:community-post", "source:discourse"],
+      "metadata": {},
+      "source_fact_ids": ["sf-strong", "sf-extra"]
+    },
+    {
+      "type": "observation",
+      "text": "A niche unsolved edge case mentioned once with no traction.",
+      "tags": ["type:community-post", "source:discourse"],
+      "metadata": {},
+      "source_fact_ids": ["sf-weak"]
+    },
+    {
+      "type": "world",
+      "text": "User Martijn cannot connect Claude Desktop to the n8n Cloud MCP server. Accepted answer: the endpoint returned gzipped data; sending uncompressed responses fixed it.",
+      "tags": ["type:community-post", "source:discourse", "outcome:solved"],
+      "metadata": {"url": "https://community.n8n.io/t/claude-desktop-connection-supergate-error/111674", "like_count": "6", "views": "563", "has_accepted_answer": "True"}
+    },
+    {
+      "type": "world",
+      "text": "Raw low-engagement post about exporting credentials.",
+      "tags": ["type:community-post", "source:discourse", "outcome:unsolved"],
+      "metadata": {"url": "https://community.n8n.io/t/raw-low/1", "views": "5"}
+    }
+  ],
+  "source_facts": {
+    "sf-strong": {"text": "MCP gzip thread", "tags": ["type:community-post", "source:discourse", "outcome:solved"], "metadata": {"url": "https://community.n8n.io/t/mcp-server-n8n-cloud-not-working-in-claude-desktop/118647", "like_count": "13", "views": "3062", "has_accepted_answer": "True"}},
+    "sf-extra": {"text": "related", "tags": ["source:discourse"], "metadata": {"url": "https://community.n8n.io/t/claude-ai-mcp-connector-failing/118647b", "views": "750", "has_accepted_answer": "True"}},
+    "sf-weak": {"text": "niche", "tags": ["source:discourse"], "metadata": {"url": "https://community.n8n.io/t/niche-thing/999", "views": "12"}}
+  }
+}

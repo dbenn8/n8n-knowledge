@@ -96,6 +96,31 @@ assert_contains "post includes Source line" "Source: https://community.n8n.io/t/
 assert_contains "post shows views" "563 views" "$post_block"
 assert_not_contains "post has no synthesis note" "machine-distilled" "$post_block"
 
+# --- Task 3: integration via format_results ---
+FIXTURE="$SCRIPT_DIR/fixtures/recall-with-source-facts.json"
+ctx=$(python3 "$LIB_DIR/format_results.py" "$FIXTURE" | python3 -c "import json,sys; print(json.load(sys.stdin)['hookSpecificOutput']['additionalContext'])")
+
+confidence_of() { # $1=context  $2=text fragment
+  python3 -c "
+import sys, re
+ctx, frag = sys.argv[1], sys.argv[2]
+for block in re.findall(r'<result\b.*?</result>', ctx, re.S):
+    if frag in block:
+        m = re.search(r'confidence=\"(\w+)\"', block)
+        print(m.group(1) if m else ''); break
+" "$1" "$2"
+}
+
+assert_eq "strong-source observation promoted to HIGH" "HIGH" "$(confidence_of "$ctx" "disabling gzip resolves it")"
+assert_contains "promoted observation is labeled synthesis" 'kind=\"synthesis\"' "$ctx"
+assert_contains "synthesis shows source engagement (3062 views)" "3062 views" "$ctx"
+assert_contains "synthesis carries verify/fetch note" "machine-distilled" "$ctx"
+assert_eq "raw solved source scores HIGH" "HIGH" "$(confidence_of "$ctx" "sending uncompressed responses fixed it")"
+assert_contains "tie-break keeps raw LOW result" "exporting credentials" "$ctx"
+assert_not_contains "tie-break drops observation LOW result" "niche unsolved edge case" "$ctx"
+assert_contains "header explains result tags" "<result>" "$ctx"
+assert_contains "header has fetch nudge" "fetch a source URL" "$ctx"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
