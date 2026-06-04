@@ -27,6 +27,8 @@ git clone https://github.com/dbenn8/n8n-knowledge.git
 - **Manual recall** — ask Claude to search deeper when auto-recall didn't trigger (~20 results)
 - **Smart detection** — two-tier repo detection: broad keywords (workflow, node, trigger, etc.) in n8n codebases, explicit "n8n" only in consumer repos (e.g., docker-compose referencing n8n). Zero noise in non-n8n projects.
 - **Confidence scoring** — each result annotated HIGH/MEDIUM/LOW based on source type and engagement metrics (votes, likes, views, solved status), with user-configurable thresholds. The plugin filters and truncates results. The model is warned that injected context is publicly sourced and directed to verify safety and review confidence scores before acting on any result.
+- **GitHub issue state** — every GitHub result is prefixed with its canonical state, e.g. `[OPEN]` or `[CLOSED·completed·2026-02-26]` / `[CLOSED·not_planned·…]` / `[CLOSED·duplicate]` (observations inherit it from their primary source). A header note reminds the model that `[CLOSED·completed]` usually means already fixed (don't add a workaround), `[CLOSED·not_planned]` means n8n won't fix it (upgrading won't help), versions in result text are the *reporter's* environment, and live GitHub state should be verified before designing around an item — so it never builds a workaround for a bug that's already resolved.
+- **Backstop recall** — refreshes n8n context *during* an agentic session (after Edit/Write/Task), not just on your prompt — gated, deduped, and capped. See [Backstop recall](#backstop-recall-mid-turn-context).
 - **Source citations** — every result links to the specific doc page, GitHub issue, or community post
 - **Speech-to-text friendly** — handles "nation" → "n8n" disambiguation
 
