@@ -97,8 +97,10 @@ assert_contains "has github URL" "github.com" "$context"
 # GitHub no-signal issue (hhh: base 49, no bonuses) should be LOW
 assert_eq "github no signals is LOW" "LOW" "$(confidence_of "$context" "zero engagement")"
 
-# Stale github (fff: closed+completed BUT has Stale label = no clear_signal_bonus, base 49 + medium engagement 1+8=9 < 10 so no bonus = 49) = LOW
-assert_contains "stale github shows stale hint" "stale.*no resolution" "$context"
+# Stale github (fff: closed+completed BUT has Stale label) — the bucket hint must NOT
+# contradict the canonical [CLOSED·completed] tag by claiming "stale — no resolution".
+assert_contains "stale-completed github shows reconciled hint" "marked stale" "$context"
+assert_not_contains "stale-completed github does not say 'stale — no resolution'" "stale — no resolution" "$context"
 
 # GitHub closed not_planned with MEMBER author (ggg: 49+25+5+10=89) = HIGH
 assert_eq "not_planned member is HIGH" "HIGH" "$(confidence_of "$context" "not planned for current archit")"

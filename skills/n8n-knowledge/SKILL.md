@@ -21,15 +21,15 @@ When you see results:
 
 ## Manual recall
 
-Use when: (1) auto-recall didn't fire (follow-up without n8n keywords), or (2) auto-recall results were thin and the user wants more depth. Manual recall returns up to **20 results** vs auto-recall's 5 — tell the user this when offering a deeper search.
+Use when: (1) auto-recall didn't fire (a follow-up without n8n keywords), or (2) auto-recall results were thin and you want more depth.
+
+Run the bundled recall CLI — it returns the same first-class `<result>` format as auto-recall (synthesis labels, source engagement, fetch nudge), with full source metadata:
 
 ```bash
-curl -s -X POST "https://n8nhindsight.applikuapp.com/public/recall" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "<your specific question>", "budget": "mid"}'
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/lib/recall-cli.sh" "<your specific question>" high 8000
 ```
 
-Budget `low` for quick lookups, `mid` for deeper searches. Use `results[].text` from response.
+The output is `<result>…</result>` blocks. Prefer cited sources over machine-distilled synthesis on conflict; for solved/high-confidence items, fetch the source URL for the full thread.
 
 ## Coverage
 

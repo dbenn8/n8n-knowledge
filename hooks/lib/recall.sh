@@ -6,9 +6,12 @@ RECALL_URL="https://n8nhindsight.applikuapp.com/public/recall"
 do_recall() {
   local query="$1"
   local budget="${2:-low}"
+  local max_tokens="${3:-3000}"
   curl -s -X POST "$RECALL_URL" \
     -H "Content-Type: application/json" \
-    -d "$(printf '{"query": %s, "budget": "%s", "max_tokens": 3000, "include": {"source_facts": {}}}' "$(printf '%s' "$query" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" "$budget")"
+    -d "$(printf '{"query": %s, "budget": "%s", "max_tokens": %s, "include": {"source_facts": {}}}' \
+      "$(printf '%s' "$query" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" \
+      "$budget" "$max_tokens")"
 }
 
 format_recall_results() {

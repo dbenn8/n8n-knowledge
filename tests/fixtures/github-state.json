@@ -1,0 +1,11 @@
+{
+  "results": [
+    {"type":"world","text":"Slack node ignores the oldest parameter when fetching messages.","tags":["type:github-issue","source:github","state:closed"],"metadata":{"url":"https://github.com/n8n-io/n8n/issues/24140","state":"closed","state_reason":"completed","closed_at":"2026-02-26T10:00:00Z"}},
+    {"type":"world","text":"NDV shows stale options after switching node version.","tags":["type:github-issue","source:github"],"metadata":{"url":"https://github.com/n8n-io/n8n/issues/31626","state":"open"}},
+    {"type":"observation","text":"Code node tasks time out after 60 seconds in production due to task-runner capacity.","tags":["type:github-issue","source:github"],"metadata":{},"source_fact_ids":["sf-cn"]},
+    {"type":"world","text":"User asks how to format a date with Luxon.","tags":["type:community-post","source:discourse","outcome:solved"],"metadata":{"url":"https://community.n8n.io/t/x/1","like_count":"3","views":"500","has_accepted_answer":"True"}}
+  ],
+  "source_facts": {
+    "sf-cn": {"text":"Code node timeout","tags":["type:github-issue","source:github"],"metadata":{"url":"https://github.com/n8n-io/n8n/issues/31331","state":"closed","state_reason":"not_planned","closed_at":"2026-05-29T00:00:00Z"}}
+  }
+}
