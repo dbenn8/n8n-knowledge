@@ -231,7 +231,9 @@ def get_github_bucket(r):
     state = meta.get("state", "open")
     state_reason = meta.get("state_reason", "")
 
-    if state == "closed" and state_reason == "completed" and "label:Stale" not in tag_set:
+    if state == "closed" and state_reason == "completed":
+        if "label:Stale" in tag_set:
+            return "closed as completed but was marked stale — likely auto-closed/abandoned, not necessarily fixed; verify"
         return "closed as completed — verify a fix actually shipped (can be a resolved/dup closure)"
     if state == "open" and any(t in tag_set for t in ("label:status:in-linear", "label:status:team-assigned")):
         return "acknowledged — n8n is tracking internally"
