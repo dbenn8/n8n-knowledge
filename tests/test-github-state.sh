@@ -40,6 +40,9 @@ assert_contains "observation inherits source-fact CLOSED·not_planned tag" "[CLO
 assert_contains "header guidance present" "Verify a result" "$context"
 assert_contains "community result text present" "format a date with Luxon" "$context"
 assert_not_contains "community result not tagged OPEN" "[OPEN] User asks how to format" "$context"
+# Gap #1: the legacy bucket phrase must not over-assert a fix for completed closures
+assert_not_contains "completed result does not over-assert 'fixed'" "fixed — update n8n for the fix" "$context"
+assert_contains "completed bucket is non-asserting" "verify a fix actually shipped" "$context"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
