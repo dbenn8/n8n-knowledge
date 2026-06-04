@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.3.4
+## 0.3.5
 
 ### Backstop recall (mid-turn context injection)
 - New `PostToolUse` hook refreshes n8n knowledge-base context **during** an agentic session — after `Edit`/`Write`/`Task`, not just on the user's prompt. Gated, deduped by topic, and capped per session (`backstopRecallCap`, default 4).
-- New `PreToolUse`-on-`Task` hook can prepend context into a subagent's prompt. **Disabled by default** (`enableSubagentInjection=false`) pending runtime verification of `updatedInput`.
+- New `PreToolUse`-on-`Task` hook can prepend context into a subagent's prompt. **⚠️ WORK IN PROGRESS — UNTESTED. Ships dormant and disabled** (`enableSubagentInjection=false`). The `updatedInput` mechanism it relies on has not been verified at runtime; do not enable it until a future release confirms it works.
 - Smart query windowing keeps the recall query under Hindsight's 500-token cap and anchors it on the first not-yet-recalled keyword, so successive tool calls surface new topics.
 - New config: `enableBackstopRecall`, `backstopRecallCap`, `backstopRecallMaxTokens` (default 8000), `backstopRecallBudget` (default `high`), `enableSubagentInjection`.
 - All recall consumers (auto-recall hook, backstop, manual skill) now share one rendering path via `recall-cli.sh`; the manual recall skill now returns the same first-class `<result>` format with source metadata.

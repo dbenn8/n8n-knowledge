@@ -2,7 +2,7 @@
   "name": "n8n-knowledge",
   "displayName": "n8n Knowledge Base",
   "description": "Auto-recalls n8n documentation and community knowledge when working on n8n projects. Powered by a Hindsight graph memory database with 315+ pages of official n8n docs.",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "author": {
     "name": "Dan Bennett"
   },
@@ -24,7 +24,7 @@
     "backstopRecallCap": { "type": "number", "title": "Backstop Recall Cap", "description": "Max backstop recalls per session.", "default": 4 },
     "backstopRecallMaxTokens": { "type": "number", "title": "Backstop Recall Max Tokens", "description": "Returned-context size cap per backstop recall.", "default": 8000 },
     "backstopRecallBudget": { "type": "string", "title": "Backstop Recall Budget", "description": "Hindsight recall effort: low, mid, or high.", "default": "high" },
-    "enableSubagentInjection": { "type": "boolean", "title": "Inject Context Into Subagents", "description": "Prepend n8n context into Task subagent prompts (experimental).", "default": false },
+    "enableSubagentInjection": { "type": "boolean", "title": "Inject Context Into Subagents (WIP — do not enable)", "description": "WORK IN PROGRESS — UNTESTED. Prepends n8n context into Task subagent prompts via the PreToolUse updatedInput mechanism, which has NOT been verified at runtime. Leave OFF: enabling it is unsupported and may not work or may interfere with subagent prompts until a future release verifies it.", "default": false },
     "triggerKeywords": { "type": "string", "title": "Trigger Keywords", "description": "Comma list of broad n8n trigger keywords used in n8n codebases. Use the token DEFAULTS to include the built-ins (workflow, node, trigger, webhook, credential, expression, execution). Example: 'DEFAULTS, mynode'. Leave blank for defaults.", "default": "" }
   }
 }

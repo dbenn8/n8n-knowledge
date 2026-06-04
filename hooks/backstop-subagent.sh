@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
-# PreToolUse on Task: optionally prepend n8n context into the subagent prompt.
+# ============================================================================
+#  WORK IN PROGRESS — UNTESTED. DO NOT ENABLE.
+#  PreToolUse on Task: prepend n8n context into the subagent prompt via
+#  `updatedInput`. This injection path has NOT been verified at runtime — we
+#  have not confirmed Claude Code actually honors updatedInput for Task calls.
+#  It ships DORMANT, gated behind enableSubagentInjection (default false), so
+#  the default install never executes it. Do NOT set
+#  enableSubagentInjection=true until a future release verifies this works —
+#  enabling it is unsupported and may not work or may corrupt subagent prompts.
+# ============================================================================
 # Gated by enableSubagentInjection (default false). Never blocks.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
