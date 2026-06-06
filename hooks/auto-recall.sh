@@ -60,4 +60,32 @@ except Exception:
 fi
 
 # Format and output results (pass CWD for .local.md config lookup)
-format_recall_results "$TMPFILE" "$CWD"
+RESULT=$(format_recall_results "$TMPFILE" "$CWD")
+
+# Debug mode: print injected content to terminal so user can see what the harness receives
+DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-false}"
+if [ "$DEBUG" = "true" ] && [ -n "$RESULT" ]; then
+  CONTEXT=$(echo "$RESULT" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
+    if ctx:
+        print(ctx)
+except Exception:
+    pass
+" 2>/dev/null || true)
+  if [ -n "$CONTEXT" ]; then
+    echo "" >&2
+    echo "┌─── n8n-knowledge: injected context ───┐" >&2
+    echo "$CONTEXT" | head -60 >&2
+    TOTAL_LINES=$(echo "$CONTEXT" | wc -l | tr -d ' ')
+    if [ "$TOTAL_LINES" -gt 60 ]; then
+      echo "  ... ($((TOTAL_LINES - 60)) more lines)" >&2
+    fi
+    echo "└───────────────────────────────────────┘" >&2
+    echo "" >&2
+  fi
+fi
+
+echo "$RESULT"

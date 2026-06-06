@@ -69,4 +69,19 @@ fi
 HEADER="*** n8n Knowledge Base — context refresh (after $TOOL) ***"
 CTX="$HEADER
 $BLOCK"
-python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$CTX" 2>/dev/null || exit 0
+OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$CTX" 2>/dev/null) || exit 0
+
+# Debug mode: print injected context to terminal
+if [ "${CLAUDE_PLUGIN_OPTION_debugRecall:-false}" = "true" ]; then
+  echo "" >&2
+  echo "┌─── n8n-knowledge: backstop context (after $TOOL) ───┐" >&2
+  echo "$CTX" | head -40 >&2
+  TOTAL_LINES=$(echo "$CTX" | wc -l | tr -d ' ')
+  if [ "$TOTAL_LINES" -gt 40 ]; then
+    echo "  ... ($((TOTAL_LINES - 40)) more lines)" >&2
+  fi
+  echo "└─────────────────────────────────────────────────────┘" >&2
+  echo "" >&2
+fi
+
+echo "$OUTPUT"
