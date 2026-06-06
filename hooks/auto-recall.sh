@@ -65,40 +65,25 @@ RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 # Debug mode: off, summary (default — truncated preview), full (complete injected context)
 DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
-  CONTEXT=$(echo "$RESULT" | python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
-    if ctx:
-        print(ctx)
-except Exception:
-    pass
-" 2>/dev/null || true)
-  if [ -n "$CONTEXT" ]; then
-    TOTAL_LINES=$(echo "$CONTEXT" | wc -l | tr -d ' ')
-    if [ "$DEBUG" = "full" ]; then
-      DEBUG_MSG="n8n-knowledge injected $TOTAL_LINES lines of context:
-$CONTEXT"
-    else
-      PREVIEW=$(echo "$CONTEXT" | head -30)
-      if [ "$TOTAL_LINES" -gt 30 ]; then
-        DEBUG_MSG="n8n-knowledge injected $TOTAL_LINES lines (showing 30, set debugRecall=full for all):
-$PREVIEW
-... ($((TOTAL_LINES - 30)) more lines)"
-      else
-        DEBUG_MSG="n8n-knowledge injected $TOTAL_LINES lines of context:
-$PREVIEW"
-      fi
-    fi
-    # Merge systemMessage into the hook output
-    RESULT=$(echo "$RESULT" | python3 -c "
+  RESULT=$(echo "$RESULT" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-data['systemMessage'] = sys.argv[1]
+ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
+if ctx:
+    mode = '$DEBUG'
+    lines = ctx.split('\n')
+    total = len(lines)
+    if mode == 'full':
+        msg = f'n8n-knowledge injected {total} lines of context:\n' + ctx
+    else:
+        preview = '\n'.join(lines[:30])
+        if total > 30:
+            msg = f'n8n-knowledge injected {total} lines (showing 30, set debugRecall=full for all):\n{preview}\n... ({total - 30} more lines)'
+        else:
+            msg = f'n8n-knowledge injected {total} lines of context:\n{preview}'
+    data['systemMessage'] = msg
 print(json.dumps(data))
-" "$DEBUG_MSG" 2>/dev/null || echo "$RESULT")
-  fi
+" 2>/dev/null || echo "$RESULT")
 fi
 
 echo "$RESULT"

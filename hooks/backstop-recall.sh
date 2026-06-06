@@ -73,28 +73,28 @@ OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'h
 
 # Debug mode: off, summary (default), full
 DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
+TOOL_NAME="$TOOL"
 if [ "$DEBUG" != "off" ]; then
-  TOTAL_LINES=$(echo "$CTX" | wc -l | tr -d ' ')
-  if [ "$DEBUG" = "full" ]; then
-    DEBUG_MSG="n8n-knowledge backstop (after $TOOL) injected $TOTAL_LINES lines:
-$CTX"
-  else
-    PREVIEW=$(echo "$CTX" | head -20)
-    if [ "$TOTAL_LINES" -gt 20 ]; then
-      DEBUG_MSG="n8n-knowledge backstop (after $TOOL) injected $TOTAL_LINES lines (showing 20):
-$PREVIEW
-... ($((TOTAL_LINES - 20)) more lines)"
-    else
-      DEBUG_MSG="n8n-knowledge backstop (after $TOOL) injected $TOTAL_LINES lines:
-$PREVIEW"
-    fi
-  fi
-  OUTPUT=$(echo "$OUTPUT" | python3 -c "
-import json, sys
+  OUTPUT=$(echo "$OUTPUT" | TOOL_NAME="$TOOL_NAME" python3 -c "
+import json, sys, os
 data = json.load(sys.stdin)
-data['systemMessage'] = sys.argv[1]
+ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
+if ctx:
+    mode = '$DEBUG'
+    tool = os.environ.get('TOOL_NAME', 'unknown')
+    lines = ctx.split('\n')
+    total = len(lines)
+    if mode == 'full':
+        msg = f'n8n-knowledge backstop (after {tool}) injected {total} lines:\n' + ctx
+    else:
+        preview = '\n'.join(lines[:20])
+        if total > 20:
+            msg = f'n8n-knowledge backstop (after {tool}) injected {total} lines (showing 20):\n{preview}\n... ({total - 20} more lines)'
+        else:
+            msg = f'n8n-knowledge backstop (after {tool}) injected {total} lines:\n{preview}'
+    data['systemMessage'] = msg
 print(json.dumps(data))
-" "$DEBUG_MSG" 2>/dev/null || echo "$OUTPUT")
+" 2>/dev/null || echo "$OUTPUT")
 fi
 
 echo "$OUTPUT"
