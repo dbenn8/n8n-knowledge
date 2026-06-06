@@ -28,6 +28,12 @@ def generate(db_path, output_path):
             return
         entries[key] = nt
 
+    def add_service_prefix(raw_suffix, nt, overwrite=True):
+        """Extract bare service name from compound suffixes like sentryIo, hubspotTool."""
+        stripped = re.sub(r'(Io|Tool|Api|App|Cloud)$', '', raw_suffix)
+        if stripped and stripped != raw_suffix:
+            add_entry(stripped.lower(), nt, overwrite)
+
     # Pass 1: non-trigger nodes (priority)
     for row in non_triggers:
         nt = row['node_type']
@@ -39,6 +45,7 @@ def generate(db_path, output_path):
         split = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_suffix).lower()
         if split != suffix:
             add_entry(split, nt)
+        add_service_prefix(raw_suffix, nt)
 
     # Pass 2: trigger nodes (fill gaps only)
     for row in triggers:
@@ -54,6 +61,7 @@ def generate(db_path, output_path):
         base = re.sub(r'trigger$', '', suffix)
         if base and base != suffix:
             add_entry(base, nt, overwrite=False)
+        add_service_prefix(raw_suffix, nt, overwrite=False)
 
     conn.close()
 
