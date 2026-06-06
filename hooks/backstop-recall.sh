@@ -71,30 +71,26 @@ CTX="$HEADER
 $BLOCK"
 OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$CTX" 2>/dev/null) || exit 0
 
-# Debug mode: off, summary (default), full
+# Debug log: write injected context to file for tail -f monitoring
 DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
-TOOL_NAME="$TOOL"
 if [ "$DEBUG" != "off" ]; then
-  OUTPUT=$(echo "$OUTPUT" | TOOL_NAME="$TOOL_NAME" python3 -c "
-import json, sys, os
-data = json.load(sys.stdin)
-ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
-if ctx:
-    mode = '$DEBUG'
-    tool = os.environ.get('TOOL_NAME', 'unknown')
-    lines = ctx.split('\n')
-    total = len(lines)
+  python3 -c "
+import sys
+ctx = sys.argv[1]
+mode = sys.argv[2]
+tool = sys.argv[3]
+lines = ctx.split('\n')
+total = len(lines)
+with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
+    f.write(f'\n┌─── n8n-knowledge: backstop after {tool} ({total} lines) ───┐\n')
     if mode == 'full':
-        msg = f'n8n-knowledge backstop (after {tool}) injected {total} lines:\n' + ctx
+        f.write(ctx + '\n')
     else:
-        preview = '\n'.join(lines[:20])
+        f.write('\n'.join(lines[:20]) + '\n')
         if total > 20:
-            msg = f'n8n-knowledge backstop (after {tool}) injected {total} lines (showing 20):\n{preview}\n... ({total - 20} more lines)'
-        else:
-            msg = f'n8n-knowledge backstop (after {tool}) injected {total} lines:\n{preview}'
-    data['systemMessage'] = msg
-print(json.dumps(data))
-" 2>/dev/null || echo "$OUTPUT")
+            f.write(f'... ({total - 20} more lines)\n')
+    f.write('└────────────────────────────────────────────────────────┘\n')
+" "$CTX" "$DEBUG" "$TOOL" 2>/dev/null || true
 fi
 
 echo "$OUTPUT"

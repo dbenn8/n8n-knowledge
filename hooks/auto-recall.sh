@@ -63,9 +63,10 @@ fi
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
 # Debug mode: off, summary (default — truncated preview), full (complete injected context)
+# Output written to log file — tail -f /tmp/n8n-knowledge-debug.log in another terminal
 DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
-  RESULT=$(echo "$RESULT" | python3 -c "
+  echo "$RESULT" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
@@ -73,17 +74,16 @@ if ctx:
     mode = '$DEBUG'
     lines = ctx.split('\n')
     total = len(lines)
-    if mode == 'full':
-        msg = f'n8n-knowledge injected {total} lines of context:\n' + ctx
-    else:
-        preview = '\n'.join(lines[:30])
-        if total > 30:
-            msg = f'n8n-knowledge injected {total} lines (showing 30, set debugRecall=full for all):\n{preview}\n... ({total - 30} more lines)'
+    with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
+        f.write('\n┌─── n8n-knowledge: auto-recall (' + str(total) + ' lines) ───┐\n')
+        if mode == 'full':
+            f.write(ctx + '\n')
         else:
-            msg = f'n8n-knowledge injected {total} lines of context:\n{preview}'
-    data['systemMessage'] = msg
-print(json.dumps(data))
-" 2>/dev/null || echo "$RESULT")
+            f.write('\n'.join(lines[:30]) + '\n')
+            if total > 30:
+                f.write(f'... ({total - 30} more lines, set debugRecall=full to see all)\n')
+        f.write('└────────────────────────────────────────────────────┘\n')
+" 2>/dev/null || true
 fi
 
 echo "$RESULT"
