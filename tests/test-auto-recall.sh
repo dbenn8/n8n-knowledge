@@ -32,20 +32,20 @@ assert_contains() {
 echo "=== auto-recall integration tests ==="
 
 # Test 1: Non-n8n message produces no output
-output=$(cat "$SCRIPT_DIR/fixtures/prompt-without-n8n.json" | CLAUDE_PLUGIN_OPTION_enableAutoRecall=true bash "$HOOK" 2>/dev/null)
+output=$(cat "$SCRIPT_DIR/fixtures/prompt-without-n8n.json" | CLAUDE_PLUGIN_OPTION_ENABLEAUTORECALL=true bash "$HOOK" 2>/dev/null)
 assert_eq "non-n8n message returns empty" "" "$output"
 
 # Test 2: n8n message produces JSON output (hits live API)
 HINDSIGHT_URL="https://n8nhindsight.applikuapp.com"
 if curl -s --max-time 3 "$HINDSIGHT_URL/health" > /dev/null 2>&1; then
-  output=$(cat "$SCRIPT_DIR/fixtures/prompt-with-n8n.json" | CLAUDE_PLUGIN_OPTION_enableAutoRecall=true bash "$HOOK" 2>/dev/null)
+  output=$(cat "$SCRIPT_DIR/fixtures/prompt-with-n8n.json" | CLAUDE_PLUGIN_OPTION_ENABLEAUTORECALL=true bash "$HOOK" 2>/dev/null)
   assert_contains "n8n message returns knowledge base results" "n8n Knowledge Base" "$output"
 else
   echo "  SKIP: n8n message test (API unreachable)"
 fi
 
 # Test 3: Disabled auto-recall produces no output
-output=$(cat "$SCRIPT_DIR/fixtures/prompt-with-n8n.json" | CLAUDE_PLUGIN_OPTION_enableAutoRecall=false bash "$HOOK" 2>/dev/null)
+output=$(cat "$SCRIPT_DIR/fixtures/prompt-with-n8n.json" | CLAUDE_PLUGIN_OPTION_ENABLEAUTORECALL=false bash "$HOOK" 2>/dev/null)
 assert_eq "disabled auto-recall returns empty" "" "$output"
 
 echo ""

@@ -7,7 +7,7 @@ N8N_DEFAULT_KEYWORDS="workflow node trigger webhook credential expression execut
 resolve_trigger_keywords() {
   # Output a space-separated keyword list. Honors CLAUDE_PLUGIN_OPTION_triggerKeywords
   # (comma list). The token DEFAULTS expands to the built-in list inline.
-  local cfg="${CLAUDE_PLUGIN_OPTION_triggerKeywords:-}"
+  local cfg="${CLAUDE_PLUGIN_OPTION_TRIGGERKEYWORDS:-}"
   if [ -z "$cfg" ]; then
     printf '%s' "$N8N_DEFAULT_KEYWORDS"; return
   fi
@@ -29,13 +29,27 @@ is_n8n_codebase() {
   local cwd="$1"
   [ -z "$cwd" ] && { echo "no"; return; }
 
+  # package.json references n8n
   if [ -f "$cwd/package.json" ] && grep -qE '"n8n[-"]' "$cwd/package.json" 2>/dev/null; then
     echo "yes"; return
   fi
 
-  if ls "$cwd"/*.n8n.json 1>/dev/null 2>&1; then
+  # .n8n.json config files
+  if ls "$cwd"/*.n8n.json 1>/dev/null 2>/dev/null; then
     echo "yes"; return
   fi
+
+  # README mentions n8n
+  for f in "$cwd"/README*; do
+    [ -f "$f" ] && grep -qiw "n8n" "$f" 2>/dev/null && { echo "yes"; return; }
+  done
+
+  # n8n workflow JSON files ({"name": "...", "nodes": [...)
+  for f in "$cwd"/*.workflow.json "$cwd"/workflows/*.workflow.json "$cwd"/workflows/*.json; do
+    if [ -f "$f" ] && head -5 "$f" 2>/dev/null | grep -q '"nodes"' 2>/dev/null; then
+      echo "yes"; return
+    fi
+  done
 
   echo "no"
 }
