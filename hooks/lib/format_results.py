@@ -75,6 +75,62 @@ def is_observation(r):
     return r.get("type") == "observation"
 
 
+def is_node_spec(r):
+    """Check if a result is a node specification (tagged type:node-spec)."""
+    return "type:node-spec" in (r.get("tags") or [])
+
+
+def render_node_spec(n, r, cfg):
+    """Render a node-spec result as a compact <result> block."""
+    meta = r.get("metadata") or {}
+    tags = r.get("tags") or []
+    text = (r.get("text") or "").strip()
+
+    display_name = meta.get("display_name", "")
+    node_type = meta.get("node_type", "")
+
+    # Fall back to extracting from tags if metadata is sparse
+    if not node_type:
+        for t in tags:
+            if t.startswith("node:"):
+                node_type = t[5:]
+                break
+    if not display_name and node_type:
+        # Derive display name from node type suffix (e.g. nodes-base.slack -> Slack)
+        suffix = node_type.split(".")[-1]
+        display_name = re.sub(r"([a-z])([A-Z])", r"\1 \2", suffix).title()
+
+    # Build the node header line
+    node_line = f"Node: {display_name}" if display_name else "Node: unknown"
+    if node_type:
+        node_line += f" ({node_type})"
+
+    lines = [node_line]
+
+    # Resource/operation line
+    resource = meta.get("resource", "")
+    operation = meta.get("operation", "")
+    if resource and operation:
+        lines.append(f"Operation: {resource}.{operation}")
+    elif resource:
+        lines.append(f"Resource: {resource}")
+
+    # Content (field list or description from the text)
+    if text:
+        # Truncate long specs
+        max_len = cfg.get("max_text_length_high", -1)
+        if max_len >= 0 and len(text) > max(max_len, 500):
+            text = text[:max(max_len, 500)] + "..."
+        lines.append(text)
+
+    lines.append("Full property spec available — ask for details.")
+    lines.append("Source: n8n node introspection")
+
+    open_tag = f'<result n="{n}" kind="node-spec" confidence="HIGH">'
+    interior = "\n".join(lines)
+    return f"{open_tag}\n{interior}\n</result>"
+
+
 def engagement_descriptor(meta, tags):
     """Compact 'solved, 13 likes, 3062 views'-style descriptor for one source post."""
     tag_set = set(tags)
@@ -417,8 +473,12 @@ def format_results(response_file, project_dir=None):
 
     source_facts = data.get("source_facts") or {}
 
+    # Separate node-spec results from regular results
+    node_specs = [r for r in results if is_node_spec(r)]
+    regular = [r for r in results if not is_node_spec(r)]
+
     scored = []
-    for r in results:
+    for r in regular:
         obs = is_observation(r)
         sf_pairs = resolve_source_facts(r, source_facts) if obs else []
         eng = sf_pairs[0][1] if sf_pairs else None
@@ -432,7 +492,7 @@ def format_results(response_file, project_dir=None):
     low = low[:cfg["max_low_results"]]
     filtered = non_low + low
 
-    if not filtered:
+    if not filtered and not node_specs:
         return None
 
     lines = [
@@ -445,8 +505,16 @@ def format_results(response_file, project_dir=None):
         "",
     ]
 
-    for n, (r, level, score, obs, sf_pairs) in enumerate(filtered, 1):
+    n = 1
+    # Render node-spec results first (always HIGH, not counted against limits)
+    for r in node_specs:
+        lines.append(render_node_spec(n, r, cfg))
+        n += 1
+
+    # Render regular results
+    for r, level, score, obs, sf_pairs in filtered:
         lines.append(render_result(n, r, level, obs, sf_pairs, cfg))
+        n += 1
 
     lines.append("")
     lines.append("*** end n8n Knowledge Base ***")
