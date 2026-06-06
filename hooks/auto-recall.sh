@@ -64,7 +64,20 @@ RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
 # Debug mode: off, summary (default — truncated preview), full (complete injected context)
 # Output written to log file — tail -f /tmp/n8n-knowledge-debug.log in another terminal
-DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
+# Read from env var first, then fall back to settings.json, then default to summary
+DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-}"
+if [ -z "$DEBUG" ]; then
+  DEBUG=$(python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser('~/.claude/settings.json')) as f:
+        s = json.load(f)
+    print(s.get('pluginConfigs', {}).get('n8n-knowledge@n8n-local', {}).get('options', {}).get('debugRecall', 'summary'))
+except Exception:
+    print('summary')
+" 2>/dev/null)
+fi
+DEBUG="${DEBUG:-summary}"
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
   echo "$RESULT" | python3 -c "
 import json, sys

@@ -72,7 +72,19 @@ $BLOCK"
 OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$CTX" 2>/dev/null) || exit 0
 
 # Debug log: write injected context to file for tail -f monitoring
-DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
+DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-}"
+if [ -z "$DEBUG" ]; then
+  DEBUG=$(python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser('~/.claude/settings.json')) as f:
+        s = json.load(f)
+    print(s.get('pluginConfigs', {}).get('n8n-knowledge@n8n-local', {}).get('options', {}).get('debugRecall', 'summary'))
+except Exception:
+    print('summary')
+" 2>/dev/null)
+fi
+DEBUG="${DEBUG:-summary}"
 if [ "$DEBUG" != "off" ]; then
   python3 -c "
 import sys
