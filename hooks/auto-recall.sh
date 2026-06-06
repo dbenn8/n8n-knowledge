@@ -62,7 +62,7 @@ fi
 # Format and output results (pass CWD for .local.md config lookup)
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
-# Debug mode: off (default), summary (truncated preview), full (complete injected context)
+# Debug mode: off, summary (default — truncated preview), full (complete injected context)
 DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
   CONTEXT=$(echo "$RESULT" | python3 -c "
@@ -77,18 +77,27 @@ except Exception:
 " 2>/dev/null || true)
   if [ -n "$CONTEXT" ]; then
     TOTAL_LINES=$(echo "$CONTEXT" | wc -l | tr -d ' ')
-    echo "" >&2
-    echo "┌─── n8n-knowledge: injected context ($TOTAL_LINES lines) ───┐" >&2
     if [ "$DEBUG" = "full" ]; then
-      echo "$CONTEXT" >&2
+      DEBUG_MSG="n8n-knowledge injected $TOTAL_LINES lines of context:
+$CONTEXT"
     else
-      echo "$CONTEXT" | head -30 >&2
+      PREVIEW=$(echo "$CONTEXT" | head -30)
       if [ "$TOTAL_LINES" -gt 30 ]; then
-        echo "  ... ($((TOTAL_LINES - 30)) more lines, set debugRecall=full to see all)" >&2
+        DEBUG_MSG="n8n-knowledge injected $TOTAL_LINES lines (showing 30, set debugRecall=full for all):
+$PREVIEW
+... ($((TOTAL_LINES - 30)) more lines)"
+      else
+        DEBUG_MSG="n8n-knowledge injected $TOTAL_LINES lines of context:
+$PREVIEW"
       fi
     fi
-    echo "└────────────────────────────────────────────────────────────┘" >&2
-    echo "" >&2
+    # Merge systemMessage into the hook output
+    RESULT=$(echo "$RESULT" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+data['systemMessage'] = sys.argv[1]
+print(json.dumps(data))
+" "$DEBUG_MSG" 2>/dev/null || echo "$RESULT")
   fi
 fi
 
