@@ -71,16 +71,21 @@ CTX="$HEADER
 $BLOCK"
 OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$CTX" 2>/dev/null) || exit 0
 
-# Debug mode: print injected context to terminal
-if [ "${CLAUDE_PLUGIN_OPTION_debugRecall:-false}" = "true" ]; then
-  echo "" >&2
-  echo "┌─── n8n-knowledge: backstop context (after $TOOL) ───┐" >&2
-  echo "$CTX" | head -40 >&2
+# Debug mode: off (default), summary (truncated), full (complete)
+DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
+if [ "$DEBUG" != "off" ]; then
   TOTAL_LINES=$(echo "$CTX" | wc -l | tr -d ' ')
-  if [ "$TOTAL_LINES" -gt 40 ]; then
-    echo "  ... ($((TOTAL_LINES - 40)) more lines)" >&2
+  echo "" >&2
+  echo "┌─── n8n-knowledge: backstop context after $TOOL ($TOTAL_LINES lines) ───┐" >&2
+  if [ "$DEBUG" = "full" ]; then
+    echo "$CTX" >&2
+  else
+    echo "$CTX" | head -20 >&2
+    if [ "$TOTAL_LINES" -gt 20 ]; then
+      echo "  ... ($((TOTAL_LINES - 20)) more lines, set debugRecall=full to see all)" >&2
+    fi
   fi
-  echo "└─────────────────────────────────────────────────────┘" >&2
+  echo "└──────────────────────────────────────────────────────────────────────┘" >&2
   echo "" >&2
 fi
 
