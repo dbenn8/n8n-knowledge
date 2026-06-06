@@ -473,9 +473,11 @@ def format_results(response_file, project_dir=None):
 
     source_facts = data.get("source_facts") or {}
 
-    # Separate node-spec results from regular results
+    # Separate node-spec results from regular results, suppress workflow source JSON
     node_specs = [r for r in results if is_node_spec(r)]
-    regular = [r for r in results if not is_node_spec(r)]
+    regular = [r for r in results
+               if not is_node_spec(r)
+               and "type:workflow-source" not in (r.get("tags") or [])]
 
     scored = []
     for r in regular:

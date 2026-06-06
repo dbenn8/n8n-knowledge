@@ -141,6 +141,40 @@ assert_contains "still has kind=node-spec" 'kind="node-spec"' "$minimal_result"
 assert_contains "still HIGH confidence" 'confidence="HIGH"' "$minimal_result"
 assert_not_contains "no Operation line without metadata" "Operation:" "$minimal_result"
 
+# --- Test 4: Workflow source units suppressed from auto-recall ---
+echo ""
+echo "--- workflow-source suppression ---"
+WF_TMPFILE=$(mktemp)
+cat > "$WF_TMPFILE" <<'ENDJSON'
+{
+  "results": [
+    {
+      "text": "Node 'Webhook' (type n8n-nodes-base.webhook) in workflow 'my-flow'. Receives from: [none]. Sends to: [Set].",
+      "tags": ["type:workflow-node", "source:n8n-docs-workflows", "wf:my-flow", "node:n8n-nodes-base.webhook"],
+      "metadata": {"workflow_name": "my-flow", "node_name": "Webhook"},
+      "type": "memory"
+    },
+    {
+      "text": "{\"nodes\": [{\"type\": \"webhook\"}, {\"type\": \"set\"}], \"connections\": {}}",
+      "tags": ["type:workflow-source", "source:n8n-docs-workflows", "wf:my-flow"],
+      "metadata": {"workflow_name": "my-flow", "node_count": "2"},
+      "type": "memory"
+    },
+    {
+      "text": "Topology of 'my-flow': Webhook -> Set",
+      "tags": ["type:workflow-topo", "source:n8n-docs-workflows", "wf:my-flow"],
+      "metadata": {"workflow_name": "my-flow"},
+      "type": "memory"
+    }
+  ]
+}
+ENDJSON
+
+wf_result=$(python3 "$LIB_DIR/format_results.py" "$WF_TMPFILE" --bare 2>/dev/null)
+assert_contains "workflow-node unit appears" "Webhook" "$wf_result"
+assert_not_contains "workflow-source suppressed" "connections" "$wf_result"
+rm -f "$WF_TMPFILE"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
