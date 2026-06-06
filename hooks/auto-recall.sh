@@ -63,21 +63,15 @@ fi
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
 # Debug mode: off, summary (default — truncated preview), full (complete injected context)
-# Output written to log file — tail -f /tmp/n8n-knowledge-debug.log in another terminal
-# Read from env var first, then fall back to settings.json, then default to summary
-DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-}"
-if [ -z "$DEBUG" ]; then
-  DEBUG=$(python3 -c "
-import json, os
-try:
-    with open(os.path.expanduser('~/.claude/settings.json')) as f:
-        s = json.load(f)
-    print(s.get('pluginConfigs', {}).get('n8n-knowledge@n8n-local', {}).get('options', {}).get('debugRecall', 'summary'))
-except Exception:
-    print('summary')
-" 2>/dev/null)
+# Claude Code passes plugin userConfig as CLAUDE_PLUGIN_OPTION_<key> env vars
+# Output written to /tmp/n8n-knowledge-debug.log — tail -f in another terminal to watch
+DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
+# Diagnostic: dump plugin env vars on first run (remove after debugging)
+if [ ! -f /tmp/n8n-knowledge-env-dump.txt ]; then
+  env | grep CLAUDE_PLUGIN > /tmp/n8n-knowledge-env-dump.txt 2>/dev/null || true
+  echo "---" >> /tmp/n8n-knowledge-env-dump.txt
+  echo "DEBUG resolved to: $DEBUG" >> /tmp/n8n-knowledge-env-dump.txt
 fi
-DEBUG="${DEBUG:-summary}"
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
   echo "$RESULT" | python3 -c "
 import json, sys
