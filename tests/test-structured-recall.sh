@@ -161,6 +161,12 @@ cat > "$WF_TMPFILE" <<'ENDJSON'
       "type": "memory"
     },
     {
+      "text": "Node 'Sticky Note' (type n8n-nodes-base.stickyNote). Set your credentials here.",
+      "tags": ["type:workflow-node", "source:n8n-docs-workflows", "wf:my-flow", "node:n8n-nodes-base.stickyNote"],
+      "metadata": {"workflow_name": "my-flow", "node_name": "Sticky Note"},
+      "type": "memory"
+    },
+    {
       "text": "Topology of 'my-flow': Webhook -> Set",
       "tags": ["type:workflow-topo", "source:n8n-docs-workflows", "wf:my-flow"],
       "metadata": {"workflow_name": "my-flow"},
@@ -173,6 +179,7 @@ ENDJSON
 wf_result=$(python3 "$LIB_DIR/format_results.py" "$WF_TMPFILE" --bare 2>/dev/null)
 assert_contains "workflow-node unit appears" "Webhook" "$wf_result"
 assert_not_contains "workflow-source suppressed" "connections" "$wf_result"
+assert_not_contains "sticky note suppressed" "Set your credentials" "$wf_result"
 rm -f "$WF_TMPFILE"
 
 echo ""
