@@ -7,7 +7,8 @@ source "$SCRIPT_DIR/lib/recall.sh"
 source "$SCRIPT_DIR/lib/structured_recall.sh"
 
 # Check if auto-recall is enabled (default: true)
-ENABLED="${CLAUDE_PLUGIN_OPTION_enableAutoRecall:-true}"
+# Note: Claude Code uppercases all plugin option env var names
+ENABLED="${CLAUDE_PLUGIN_OPTION_ENABLEAUTORECALL:-true}"
 if [ "$ENABLED" = "false" ]; then
   exit 0
 fi
@@ -63,9 +64,9 @@ fi
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
 # Debug mode: off, summary (default — truncated preview), full (complete injected context)
-# Claude Code passes plugin userConfig as CLAUDE_PLUGIN_OPTION_<key> env vars
+# Claude Code uppercases all plugin option env var names (CLAUDE_PLUGIN_OPTION_<KEY>)
 # Output written to /tmp/n8n-knowledge-debug.log — tail -f in another terminal to watch
-DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
+DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
 # Diagnostic: dump plugin env vars on first run (remove after debugging)
 if [ ! -f /tmp/n8n-knowledge-env-dump.txt ]; then
   env | grep CLAUDE_PLUGIN > /tmp/n8n-knowledge-env-dump.txt 2>/dev/null || true

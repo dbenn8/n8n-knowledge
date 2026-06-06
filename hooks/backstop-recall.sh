@@ -5,16 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
 source "$LIB_DIR/detect-n8n.sh" 2>/dev/null || exit 0
 
-[ "${CLAUDE_PLUGIN_OPTION_enableBackstopRecall:-true}" = "false" ] && exit 0
+[ "${CLAUDE_PLUGIN_OPTION_ENABLEBACKSTOPRECALL:-true}" = "false" ] && exit 0
 
 INPUT=$(cat 2>/dev/null) || exit 0
 read_field(){ printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('$1',''))" 2>/dev/null; }
 SID=$(read_field session_id); TOOL=$(read_field tool_name); CWD=$(read_field cwd)
 [ -z "$TOOL" ] && exit 0
 
-CAP="${CLAUDE_PLUGIN_OPTION_backstopRecallCap:-4}"
-BUDGET="${CLAUDE_PLUGIN_OPTION_backstopRecallBudget:-high}"
-MAXTOK="${CLAUDE_PLUGIN_OPTION_backstopRecallMaxTokens:-8000}"
+CAP="${CLAUDE_PLUGIN_OPTION_BACKSTOPRECALLCAP:-4}"
+BUDGET="${CLAUDE_PLUGIN_OPTION_BACKSTOPRECALLBUDGET:-high}"
+MAXTOK="${CLAUDE_PLUGIN_OPTION_BACKSTOPRECALLMAXTOKENS:-8000}"
 
 # Always count the tool call; do full logic only for triggers.
 case "$TOOL" in
@@ -72,7 +72,7 @@ $BLOCK"
 OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$CTX" 2>/dev/null) || exit 0
 
 # Debug log: write injected context to file for tail -f monitoring
-DEBUG="${CLAUDE_PLUGIN_OPTION_debugRecall:-summary}"
+DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
 if [ "$DEBUG" != "off" ]; then
   python3 -c "
 import sys
