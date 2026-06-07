@@ -13,15 +13,15 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
-[ "${CLAUDE_PLUGIN_OPTION_enableSubagentInjection:-false}" != "true" ] && exit 0
-[ "${CLAUDE_PLUGIN_OPTION_enableBackstopRecall:-true}" = "false" ] && exit 0
+[ "${CLAUDE_PLUGIN_OPTION_ENABLESUBAGENTINJECTION:-false}" != "true" ] && exit 0
+[ "${CLAUDE_PLUGIN_OPTION_ENABLEBACKSTOPRECALL:-true}" = "false" ] && exit 0
 source "$LIB_DIR/detect-n8n.sh" 2>/dev/null || exit 0
 
 INPUT=$(cat 2>/dev/null) || exit 0
 CWD=$(printf '%s' "$INPUT" | python3 -c "import json,sys;print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
-CAP="${CLAUDE_PLUGIN_OPTION_backstopRecallCap:-4}"
-BUDGET="${CLAUDE_PLUGIN_OPTION_backstopRecallBudget:-high}"
-MAXTOK="${CLAUDE_PLUGIN_OPTION_backstopRecallMaxTokens:-8000}"
+CAP="${CLAUDE_PLUGIN_OPTION_BACKSTOPRECALLCAP:-4}"
+BUDGET="${CLAUDE_PLUGIN_OPTION_BACKSTOPRECALLBUDGET:-high}"
+MAXTOK="${CLAUDE_PLUGIN_OPTION_BACKSTOPRECALLMAXTOKENS:-8000}"
 
 DEC=$(printf '%s' "$INPUT" | KW="$(resolve_trigger_keywords)" CAP="$CAP" python3 -c '
 import json,sys,os

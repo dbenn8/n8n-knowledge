@@ -1,0 +1,38 @@
+{
+  "results": [
+    {
+      "text": "Gmail node — Draft: Create a new draft email. Fields: to (required), subject (required), body (optional), cc (optional), bcc (optional)",
+      "tags": ["type:node-spec", "source:n8n-node-introspection", "node:nodes-base.gmail", "resource:draft", "operation:draft.create"],
+      "metadata": {
+        "node_type": "nodes-base.gmail",
+        "resource": "draft",
+        "operation": "create",
+        "display_name": "Gmail"
+      },
+      "type": "memory"
+    },
+    {
+      "id": "post-111",
+      "text": "Gmail OAuth2 credentials setup requires configuring the Google Cloud Console with the correct redirect URI for n8n.",
+      "tags": ["type:community-post", "source:discourse", "category:questions", "outcome:solved"],
+      "metadata": {
+        "url": "https://community.n8n.io/t/gmail-oauth2-setup/54321",
+        "views": "2500",
+        "like_count": "15",
+        "vote_count": "5",
+        "has_accepted_answer": "True"
+      }
+    },
+    {
+      "id": "post-222",
+      "text": "Low engagement post about Gmail attachments.",
+      "tags": ["type:community-post", "source:discourse", "category:questions", "outcome:unsolved"],
+      "metadata": {
+        "url": "https://community.n8n.io/t/gmail-attachments/99999",
+        "views": "20",
+        "like_count": "0",
+        "vote_count": "0"
+      }
+    }
+  ]
+}

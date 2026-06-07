@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "text": "Slack node — Message: Send a message to a channel. Fields: channel (required), text (required), attachments (optional)",
+      "tags": ["type:node-spec", "source:n8n-node-introspection", "node:nodes-base.slack", "resource:message", "operation:message.post"],
+      "metadata": {
+        "node_type": "nodes-base.slack",
+        "resource": "message",
+        "operation": "post",
+        "display_name": "Slack",
+        "properties_json": "{\"fields\": [\"channel\", \"text\"]}"
+      },
+      "type": "memory"
+    }
+  ]
+}

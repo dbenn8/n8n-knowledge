@@ -35,10 +35,10 @@ assert_contains "recall-cli emits <result>" "<result" "$cli"
 assert_contains "recall-cli has no hook json" "n8n Knowledge Base" "$cli"
 
 # Task 5: trigger keywords configurable, DEFAULTS sentinel.
-r1=$(CLAUDE_PLUGIN_OPTION_triggerKeywords="DEFAULTS, gizmo" bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
+r1=$(CLAUDE_PLUGIN_OPTION_TRIGGERKEYWORDS="DEFAULTS, gizmo" bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
 assert_contains "DEFAULTS expands to built-ins" "workflow" "$r1"
 assert_contains "DEFAULTS keeps additions" "gizmo" "$r1"
-r2=$(CLAUDE_PLUGIN_OPTION_triggerKeywords="alpha, beta" bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
+r2=$(CLAUDE_PLUGIN_OPTION_TRIGGERKEYWORDS="alpha, beta" bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
 assert_contains "replace mode keeps custom" "alpha" "$r2"
 case "$r2" in *workflow*) echo "  FAIL: replace mode should drop defaults"; FAIL=$((FAIL+1));; *) echo "  PASS: replace drops defaults"; PASS=$((PASS+1));; esac
 r3=$(bash -c 'source "'"$LIB_DIR"'/detect-n8n.sh"; resolve_trigger_keywords')
@@ -128,7 +128,7 @@ payload=$(python3 -c "import json;print(json.dumps({'session_id':'$SID2','cwd':'
 off=$(echo "$payload" | bash "$SCRIPT_DIR/../hooks/backstop-subagent.sh")
 assert_eq "subagent injection off by default" "" "$off"
 # enabled -> updatedInput.prompt prefixed with <result>
-on=$(echo "$payload" | CLAUDE_PLUGIN_OPTION_enableSubagentInjection=true bash "$SCRIPT_DIR/../hooks/backstop-subagent.sh")
+on=$(echo "$payload" | CLAUDE_PLUGIN_OPTION_ENABLESUBAGENTINJECTION=true bash "$SCRIPT_DIR/../hooks/backstop-subagent.sh")
 assert_contains "enabled returns updatedInput" "updatedInput" "$on"
 assert_contains "updatedInput carries result block" "<result" "$on"
 unset RECALL_CLI_TEST RECALL_FIXTURE

@@ -1,0 +1,122 @@
+[
+  {
+    "query": "configure the Slack node to post a message to a channel",
+    "expect": "nodes-base.slack"
+  },
+  {
+    "query": "send data to Postgres after transforming it",
+    "expect": "nodes-base.postgres"
+  },
+  {
+    "query": "listen for new Gmail events and process them",
+    "expect": "nodes-base.gmailTrigger"
+  },
+  {
+    "query": "use the If node to branch based on a condition",
+    "expect": "nodes-base.if"
+  },
+  {
+    "query": "make an API call to fetch some records",
+    "expect": null
+  },
+  {
+    "query": "set up an HTTP Request node to call an external API",
+    "expect": "nodes-base.httpRequest"
+  },
+  {
+    "query": "write JavaScript in the Code node to transform the payload",
+    "expect": "nodes-base.code"
+  },
+  {
+    "query": "use the Set node to add a new field to the output",
+    "expect": "nodes-base.set"
+  },
+  {
+    "query": "merge two branches of data together using Merge node",
+    "expect": "nodes-base.merge"
+  },
+  {
+    "query": "add a Switch node to route items by category",
+    "expect": "nodes-base.switch"
+  },
+  {
+    "query": "trigger the workflow on a schedule every 5 minutes",
+    "expect": "nodes-base.scheduleTrigger"
+  },
+  {
+    "query": "expose a Webhook endpoint to receive incoming data",
+    "expect": "nodes-base.webhook"
+  },
+  {
+    "query": "read rows from a Google Sheets spreadsheet",
+    "expect": "nodes-base.googleSheets"
+  },
+  {
+    "query": "send a message to Microsoft Teams when a build fails",
+    "expect": "nodes-base.microsoftTeams"
+  },
+  {
+    "query": "how do I connect n8n to Airtable",
+    "expect": "nodes-base.airtable"
+  },
+  {
+    "query": "create a new issue in Jira after processing",
+    "expect": "nodes-base.jira"
+  },
+  {
+    "query": "watch for new Telegram messages in a bot",
+    "expect": "nodes-base.telegramTrigger"
+  },
+  {
+    "query": "send an email using the Send Email node",
+    "expect": "nodes-base.emailSend"
+  },
+  {
+    "query": "how do I organize my automations into folders",
+    "expect": null
+  },
+  {
+    "query": "insert documents into MongoDB from the pipeline",
+    "expect": "nodes-base.mongoDb"
+  },
+  {
+    "query": "use MySQL to query the database for recent orders",
+    "expect": "nodes-base.mySql"
+  },
+  {
+    "query": "use the Split In Batches node to process items in groups",
+    "expect": "nodes-base.splitInBatches"
+  },
+  {
+    "query": "filter out items that don't match a condition using the Filter node",
+    "expect": "nodes-base.filter"
+  },
+  {
+    "query": "subscribe to GitHub events when a PR is opened",
+    "expect": "nodes-base.githubTrigger"
+  },
+  {
+    "query": "upload a file to AWS S3 bucket",
+    "expect": "nodes-base.awsS3"
+  },
+  {
+    "query": "what is the recommended way to handle retries",
+    "expect": null
+  },
+  {
+    "query": "create a record in Notion database",
+    "expect": "nodes-base.notion"
+  },
+  {
+    "query": "use Discord to send notifications to a channel",
+    "expect": "nodes-base.discord"
+  },
+  {
+    "query": "configure HubSpot to create contacts automatically",
+    "expect": "nodes-base.hubspot"
+  },
+  {
+    "query": "execute a workflow manually using the Manual Trigger",
+    "expect": "nodes-base.manualTrigger"
+  }
+]
