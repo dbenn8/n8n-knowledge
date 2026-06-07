@@ -76,8 +76,15 @@ def is_observation(r):
 
 
 def is_node_spec(r):
-    """Check if a result is a node specification (tagged type:node-spec)."""
-    return "type:node-spec" in (r.get("tags") or [])
+    """Check if a result is a structured node specification (not a prose observation).
+
+    Hindsight's consolidation engine creates observation summaries of node specs
+    that are tagged type:node-spec but contain only prose text (no Fields/Operation
+    markers). These are lossy duplicates of the real specs and should be filtered."""
+    if "type:node-spec" not in (r.get("tags") or []):
+        return False
+    text = r.get("text") or ""
+    return "Fields (" in text or "Fields:" in text or "Operation:" in text
 
 
 def render_node_spec(n, r, cfg):
