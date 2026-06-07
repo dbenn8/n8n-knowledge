@@ -48,6 +48,14 @@ PROMPTS=(
   "I need to split a big list into batches and process them one at a time"
   "what node should I use to filter items based on a condition"
   "how do I handle errors in my n8n workflow so it doesnt just stop"
+  "I want to build a flow that classifies incoming support tickets using OpenAI and routes them to the right team"
+  "build me a workflow that posts to different slack channels based on the priority field in the data"
+  "I need a flow that looks up customer data from a google sheet and enriches it before sending to hubspot"
+  "set up a webhook that receives events from our payment provider and creates records in our database"
+  "I need to call a flaky third party API and handle errors gracefully without stopping the whole workflow"
+  "build an AI agent workflow that uses openai to answer questions from a knowledge base"
+  "I want to connect slack to our monitoring system so we get alerts when things go wrong"
+  "create a form that collects user feedback with custom field names and sends it to notion"
 )
 
 LIMIT="${1:-${#PROMPTS[@]}}"
@@ -115,6 +123,10 @@ expected = [
   ["discord"], ["hubspot"], ["http request", "httprequest"], ["webhook"],
   ["merge"], ["code"], ["gmail", "notion"], ["teams", "microsoft teams"],
   ["salesforce"], ["batch", "split", "loop"], ["filter", "if node"], ["error"],
+  ["openai", "classify", "route"], ["slack", "channel", "priority"],
+  ["google sheets", "sheet", "hubspot"], ["webhook", "payment", "database"],
+  ["http request", "error", "api"], ["openai", "agent", "knowledge"],
+  ["slack", "alert", "monitoring"], ["form", "feedback", "notion"],
 ]
 prompts_short = [
   "slack+sheets", "gmail+webhook", "jira ticket", "postgres sched",
@@ -122,6 +134,8 @@ prompts_short = [
   "discord notif", "hubspot deals", "HTTP request", "webhook endpt",
   "merge branch", "code node", "gmail→notion", "ms teams msg",
   "salesforce", "split batches", "filter/cond", "error handling",
+  "openai route*", "slack dynamic*", "sheets lookup*", "webhook pay*",
+  "http resilient*", "openai agent*", "slack alerts*", "form survey*",
 ]
 real_cite = [r"#\d{4,}", r"github\.com/n8n", r"community\.n8n\.io", r"CLOSED", r"\[OPEN\]", r"not_planned"]
 
