@@ -1,0 +1,20 @@
+{"id":"ns-slack-post","prompt":"configure the Slack node to post a message to a channel","expected_node":"nodes-base.slack","expected_op":"message.post","category":"node_config"}
+{"id":"ns-gmail-send","prompt":"send an email using the Gmail node","expected_node":"nodes-base.gmail","expected_op":"message.send","category":"node_config"}
+{"id":"ns-postgres-insert","prompt":"insert a row into Postgres","expected_node":"nodes-base.postgres","expected_op":null,"category":"node_config"}
+{"id":"ns-notion-create","prompt":"create a page in Notion database","expected_node":"nodes-base.notion","expected_op":"databasePage.create","category":"node_config"}
+{"id":"ns-gdrive-upload","prompt":"upload a file to Google Drive","expected_node":"nodes-base.googleDrive","expected_op":"file.upload","category":"node_config"}
+{"id":"ns-hubspot-deal","prompt":"create a deal in HubSpot","expected_node":"nodes-base.hubspot","expected_op":"deal.create","category":"node_config"}
+{"id":"ns-jira-issue","prompt":"create a new issue in Jira","expected_node":"nodes-base.jira","expected_op":null,"category":"node_config"}
+{"id":"ns-telegram-msg","prompt":"send a message via Telegram bot","expected_node":"nodes-base.telegram","expected_op":"message.sendmessage","category":"node_config"}
+{"id":"ns-discord-msg","prompt":"send a Discord notification to a channel","expected_node":"nodes-base.discord","expected_op":"message.send","category":"node_config"}
+{"id":"ns-sentry-release","prompt":"create a release in Sentry","expected_node":"nodes-base.sentryIo","expected_op":"release.create","category":"node_config"}
+{"id":"ns-webhook-trigger","prompt":"set up a Webhook trigger to receive incoming data","expected_node":"nodes-base.webhook","expected_op":null,"category":"node_config"}
+{"id":"ns-http-request","prompt":"make an HTTP request to an external API","expected_node":"nodes-base.httpRequest","expected_op":null,"category":"node_config"}
+{"id":"ns-airtable-create","prompt":"create a record in Airtable","expected_node":"nodes-base.airtable","expected_op":null,"category":"node_config"}
+{"id":"ns-sheets-read","prompt":"read rows from a Google Sheets spreadsheet","expected_node":"nodes-base.googleSheets","expected_op":"sheet.read","category":"node_config"}
+{"id":"ns-salesforce-contact","prompt":"create a new contact in Salesforce","expected_node":"nodes-base.salesforce","expected_op":"contact.create","category":"node_config"}
+{"id":"typo-slak","prompt":"configure the slak node to send a message","expected_node":"nodes-base.slack","expected_op":null,"category":"node_config"}
+{"id":"typo-postgress","prompt":"set up postgress to query the database","expected_node":"nodes-base.postgres","expected_op":null,"category":"node_config"}
+{"id":"typo-webook","prompt":"add a webook trigger to my flow","expected_node":"nodes-base.webhook","expected_op":null,"category":"node_config"}
+{"id":"neg-react","prompt":"how do I deploy a React app","expected_node":null,"expected_op":null,"category":"negative"}
+{"id":"neg-retries","prompt":"what is the recommended way to handle retries","expected_node":null,"expected_op":null,"category":"negative"}

@@ -26,10 +26,11 @@ fi
 # Call the recall API
 TMPFILE=$(mktemp)
 STRUCT_TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE"' EXIT
+GOTCHA_TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"' EXIT
 do_recall "$PROMPT" "low" > "$TMPFILE"
 
-# Check for node names in the prompt and do structured recall if found
+# Check for node names in the prompt and do structured + gotcha recall if found
 NODE_TYPE=$(python3 -c "
 import sys, json
 sys.path.insert(0, '$SCRIPT_DIR/lib')
@@ -41,8 +42,12 @@ if hits:
 " <<< "$(printf '%s' "$PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" 2>/dev/null || true)
 
 if [ -n "$NODE_TYPE" ]; then
-  do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null || true
-  # Merge structured results (prepended) into semantic results
+  # Run node-spec and gotcha recalls in parallel
+  do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
+  do_gotcha_recall "$NODE_TYPE" > "$GOTCHA_TMPFILE" 2>/dev/null &
+  wait
+
+  # Merge: gotchas FIRST (highest priority), then semantic, then capped node specs
   python3 -c "
 import json, sys
 try:
@@ -50,14 +55,22 @@ try:
         sem = json.load(f)
     with open(sys.argv[2]) as f:
         struct = json.load(f)
-    struct_results = struct.get('results', [])
-    if struct_results:
-        sem['results'] = struct_results + sem.get('results', [])
+    gotcha_results = []
+    try:
+        with open(sys.argv[3]) as f:
+            gotcha = json.load(f)
+        gotcha_results = gotcha.get('results', [])[:5]
+    except Exception:
+        pass
+    struct_results = struct.get('results', [])[:5]
+    sem_results = sem.get('results', [])
+    # Order: gotchas (bugs/issues) → semantic (docs/community) → node specs (reference)
+    sem['results'] = gotcha_results + sem_results + struct_results
     with open(sys.argv[1], 'w') as f:
         json.dump(sem, f)
 except Exception:
     pass
-" "$TMPFILE" "$STRUCT_TMPFILE" 2>/dev/null || true
+" "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE" 2>/dev/null || true
 fi
 
 # Format and output results (pass CWD for .local.md config lookup)
