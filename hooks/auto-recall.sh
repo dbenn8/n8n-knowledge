@@ -63,34 +63,19 @@ fi
 # Format and output results (pass CWD for .local.md config lookup)
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
-# Debug mode: off, summary (default — truncated preview), full (complete injected context)
-# Claude Code uppercases all plugin option env var names (CLAUDE_PLUGIN_OPTION_<KEY>)
+# Debug mode: off, summary (default — condensed), full (complete with formatting)
 # Output written to /tmp/n8n-knowledge-debug.log — tail -f in another terminal to watch
 DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
-# Diagnostic: dump plugin env vars on first run (remove after debugging)
-if [ ! -f /tmp/n8n-knowledge-env-dump.txt ]; then
-  env | grep CLAUDE_PLUGIN > /tmp/n8n-knowledge-env-dump.txt 2>/dev/null || true
-  echo "---" >> /tmp/n8n-knowledge-env-dump.txt
-  echo "DEBUG resolved to: $DEBUG" >> /tmp/n8n-knowledge-env-dump.txt
-fi
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
   echo "$RESULT" | python3 -c "
 import json, sys
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+from debug_formatter import format_debug
 data = json.load(sys.stdin)
 ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
 if ctx:
-    mode = '$DEBUG'
-    lines = ctx.split('\n')
-    total = len(lines)
     with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
-        f.write('\n┌─── n8n-knowledge: auto-recall (' + str(total) + ' lines) ───┐\n')
-        if mode == 'full':
-            f.write(ctx + '\n')
-        else:
-            f.write('\n'.join(lines[:30]) + '\n')
-            if total > 30:
-                f.write(f'... ({total - 30} more lines, set debugRecall=full to see all)\n')
-        f.write('└────────────────────────────────────────────────────┘\n')
+        f.write(format_debug(ctx, '$DEBUG', 'auto-recall'))
 " 2>/dev/null || true
 fi
 

@@ -74,23 +74,15 @@ OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'h
 # Debug log: write injected context to file for tail -f monitoring
 DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
 if [ "$DEBUG" != "off" ]; then
-  python3 -c "
+  LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+  printf '%s' "$CTX" | python3 -c "
 import sys
-ctx = sys.argv[1]
-mode = sys.argv[2]
-tool = sys.argv[3]
-lines = ctx.split('\n')
-total = len(lines)
+sys.path.insert(0, '$LIB_DIR')
+from debug_formatter import format_debug
+ctx = sys.stdin.read()
 with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
-    f.write(f'\n┌─── n8n-knowledge: backstop after {tool} ({total} lines) ───┐\n')
-    if mode == 'full':
-        f.write(ctx + '\n')
-    else:
-        f.write('\n'.join(lines[:20]) + '\n')
-        if total > 20:
-            f.write(f'... ({total - 20} more lines)\n')
-    f.write('└────────────────────────────────────────────────────────┘\n')
-" "$CTX" "$DEBUG" "$TOOL" 2>/dev/null || true
+    f.write(format_debug(ctx, '$DEBUG', 'backstop after $TOOL'))
+" 2>/dev/null || true
 fi
 
 echo "$OUTPUT"
