@@ -84,7 +84,10 @@ def is_node_spec(r):
     if "type:node-spec" not in (r.get("tags") or []):
         return False
     text = r.get("text") or ""
-    return "Fields (" in text or "Fields:" in text or "Operation:" in text
+    meta = r.get("metadata") or {}
+    has_structured_content = "Fields (" in text or "Fields:" in text or "Operation:" in text
+    has_node_metadata = bool(meta.get("node_type") or meta.get("operation"))
+    return has_structured_content or has_node_metadata or r.get("type") == "memory"
 
 
 def render_node_spec(n, r, cfg):
