@@ -3,3 +3,4 @@
 /tmp/
 .claude/*.local.md
 __pycache__/
+out/

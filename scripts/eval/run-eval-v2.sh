@@ -22,7 +22,7 @@ RESULTS_DIR="$REPO_DIR/out/eval/$TIMESTAMP-v2"
 # Defaults
 LIMIT=""
 RUNS=5
-CONDITIONS="bare,plugin,mcp"
+CONDITIONS="plugin,mcp,bare"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -73,7 +73,9 @@ cat > "$N8N_MCP_CONFIG" << 'EOF'
 {"mcpServers":{"n8n-mcp":{"command":"npx","args":["-y","n8n-mcp"]}}}
 EOF
 
-SYSTEM="You are helping a user build n8n workflows. Answer their question about n8n nodes, configuration, and wiring. Be specific about which nodes to use, what fields to configure, and any gotchas or known issues. Keep it concise."
+SYSTEM="You are helping a user build n8n workflows. Answer their question about n8n nodes, configuration, and wiring. Be specific about which nodes to use, what fields to configure, and any gotchas or known issues.
+
+IMPORTANT: Always end your response with the complete, importable n8n workflow JSON inside a \`\`\`json code block. This JSON must be a valid n8n workflow object with 'nodes' array and 'connections' object that the user can directly paste into n8n's workflow import dialog. Use full node type names (e.g. 'n8n-nodes-base.slack', not just 'Slack'). Include typeVersion, position, and all required parameters for each node."
 
 echo "=== PRODUCTION EVAL v2 ==="
 echo "  Prompts: $TOTAL"
@@ -153,7 +155,7 @@ except Exception as e:
   echo "  [$cond] p$idx r$run — ${elapsed}ms"
 }
 
-# Run all conditions
+# Run conditions sequentially, prompts parallel within each
 IFS=',' read -ra COND_LIST <<< "$CONDITIONS"
 
 for cond in "${COND_LIST[@]}"; do
@@ -171,6 +173,8 @@ for cond in "${COND_LIST[@]}"; do
   echo "  Launched ${#PIDS[@]} sessions for $cond. Waiting..."
   for pid in "${PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
   echo "  $cond complete."
+  echo "  Pausing 10s before next condition..."
+  sleep 10
 done
 
 echo ""
@@ -178,14 +182,14 @@ echo "=== All conditions complete ==="
 echo ""
 
 # Aggregate results
-python3 << 'PYEOF'
+RESULTS_DIR_EXPORT="$RESULTS_DIR" python3 << 'PYEOF'
 import json, os, glob, re
 from collections import defaultdict
 
-results_dir = os.environ.get("RESULTS_DIR", "PLACEHOLDER")
-# Find actual results dir
-import sys
-results_dir = sys.argv[1] if len(sys.argv) > 1 else results_dir
+results_dir = os.environ.get("RESULTS_DIR_EXPORT", "")
+if not results_dir:
+    print("ERROR: RESULTS_DIR_EXPORT not set")
+    import sys; sys.exit(1)
 
 # Load all meta files
 data = defaultdict(lambda: defaultdict(list))
@@ -253,4 +257,5 @@ for c in conditions:
 print()
 
 print(f"\nResults: {results_dir}")
-PYEOF "$RESULTS_DIR"
+PYEOF
+
