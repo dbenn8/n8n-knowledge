@@ -40,6 +40,8 @@ def main() -> None:
         "issues": inspection.get("issues", []),
         "repair_messages": inspection["repair_messages"],
         "feedback_block": inspection["feedback_block"],
+        "validator_mode": inspection["validation"].get("validator_mode"),
+        "validator_info": inspection["validation"].get("validator_info"),
     }
 
     workflow = inspection.get("workflow")

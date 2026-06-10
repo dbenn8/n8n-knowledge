@@ -118,21 +118,22 @@ def find_n8n_mcp_install_root(config: dict[str, Any] | None = None) -> str | Non
     return None
 
 
-def resolve_validator_target(project_dir: str | None, mode_override: str | None = None):
-    """Resolve plugin-side validator routing only.
+def resolve_validator_target_config(
+    config: dict[str, Any] | None,
+    mode_override: str | None = None,
+):
+    """Resolve validator routing from an explicit config mapping."""
+    cfg = dict(DEFAULTS)
+    if config:
+        cfg.update(config)
 
-    This resolver is for future plugin validation calls. It should not be used
-    by the eval harness conditions (`plugin`, `mcp`, `bare`) or by the local
-    post-hoc validation scripts under `scripts/eval/`.
-    """
-    config = load_config(project_dir)
-    requested_mode = (mode_override or config.get("validator_mode") or "default").strip().lower()
+    requested_mode = (mode_override or cfg.get("validator_mode") or "default").strip().lower()
     if requested_mode not in {"default", "local", "cloud"}:
         requested_mode = "default"
 
-    local_root = find_n8n_mcp_install_root(config)
+    local_root = find_n8n_mcp_install_root(cfg)
     local_available = bool(local_root)
-    cloud_url = (config.get("validator_cloud_url") or "").strip()
+    cloud_url = (cfg.get("validator_cloud_url") or "").strip()
 
     effective_mode = None
     reason = ""
@@ -166,5 +167,18 @@ def resolve_validator_target(project_dir: str | None, mode_override: str | None 
         "local_root": local_root,
         "local_nodes_db_path": os.path.join(local_root, "data", "nodes.db") if local_root else None,
         "cloud_url": cloud_url or None,
-        "config": config,
+        "config": cfg,
     }
+
+
+def resolve_validator_target(project_dir: str | None, mode_override: str | None = None):
+    """Resolve plugin-side validator routing only.
+
+    This resolver is for future plugin validation calls. It should not be used
+    by the eval harness conditions (`plugin`, `mcp`, `bare`) or by the local
+    post-hoc validation scripts under `scripts/eval/`.
+    """
+    return resolve_validator_target_config(
+        load_config(project_dir),
+        mode_override=mode_override,
+    )
