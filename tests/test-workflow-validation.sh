@@ -3,7 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOK="$SCRIPT_DIR/../hooks/validate-workflow.sh"
 PASS=0; FAIL=0
-assert_contains(){ local d="$1" n="$2" h="$3"; if echo "$h"|grep -q "$n"; then echo "  PASS: $d"; PASS=$((PASS+1)); else echo "  FAIL: $d (want '$n')"; FAIL=$((FAIL+1)); fi; }
+assert_contains(){ local d="$1" n="$2" h="$3"; if echo "$h"|grep -Fq "$n"; then echo "  PASS: $d"; PASS=$((PASS+1)); else echo "  FAIL: $d (want '$n')"; FAIL=$((FAIL+1)); fi; }
 assert_eq(){ local d="$1" e="$2" a="$3"; if [ "$e" = "$a" ]; then echo "  PASS: $d"; PASS=$((PASS+1)); else echo "  FAIL: $d (want '$e' got '$a')"; FAIL=$((FAIL+1)); fi; }
 
 echo "=== workflow validation hook tests ==="
@@ -47,6 +47,29 @@ assert_contains "invalid workflow includes validator header" "n8n Workflow Valid
 assert_contains "invalid workflow marks mock validator target" "Validator target: mock" "$out2"
 assert_contains "invalid workflow includes structured patch targets" "Structured patch targets" "$out2"
 assert_contains "invalid workflow includes targeted edit instruction" "smallest targeted edits possible" "$out2"
+
+# Invalid enum/select style error -> include targeted field guidance when node + field exist.
+WF_ENUM="$TMPDIR_TEST/workflow-enum.json"
+python3 - <<'PYEOF' > "$WF_ENUM"
+import json
+print(json.dumps({
+    "name": "HubSpot Test Workflow",
+    "nodes": [{
+        "id":"hubspot-1",
+        "name":"HubSpot - Create Deal",
+        "type":"n8n-nodes-base.hubspot",
+        "typeVersion":1,
+        "position":[260,300],
+        "parameters":{"stage":"appointmentscheduled"}
+    }],
+    "connections": {}
+}))
+PYEOF
+INVALID_ENUM_MOCK='{"valid": false, "error_count": 1, "warning_count": 0, "errors": [{"type":"error","message":"Invalid value for '\''stage'\''. Must be one of: appointmentscheduled, qualifiedtobuy","node":"HubSpot - Create Deal"}], "warnings": [], "statistics": {"totalNodes": 1, "triggerNodes": 0}, "suggestions": []}'
+out_enum=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_ENUM_MOCK" bash "$HOOK" <<< "$(mk_payload Write "$WF_ENUM")")
+assert_contains "enum error includes parameter path" "nodes[name=HubSpot - Create Deal].parameters.stage" "$out_enum"
+assert_contains "enum error includes allowed values" "appointmentscheduled, qualifiedtobuy" "$out_enum"
+assert_contains "enum error includes targeted replace guidance" "Replace only the invalid \`stage\` value" "$out_enum"
 
 # Max-calls cap -> third call with cap 2 should inject a stop-loop warning.
 SIDCAP="validator-cap-test"

@@ -4,60 +4,7 @@ import json
 import re
 import sys
 
-DEFAULTS = {
-    "high_threshold": 70,
-    "medium_threshold": 50,
-    "docs_base": 80,
-    "github_base": 49,
-    "community_base": 40,
-    "solved_bonus": 25,
-    "clear_signal_bonus": 25,
-    "author_member_bonus": 5,
-    "high_engagement_threshold": 10,
-    "high_engagement_bonus": 20,
-    "medium_engagement_threshold": 3,
-    "medium_engagement_bonus": 10,
-    "high_views_threshold": 500,
-    "views_bonus": 5,
-    "max_results": 5,
-    "max_low_results": 1,
-    "max_text_length_high": -1,
-    "max_text_length_medium": 800,
-    "max_text_length_low": 300,
-}
-
-
-def load_config(project_dir):
-    """Load scoring config from .claude/n8n-knowledge.local.md if it exists."""
-    if not project_dir:
-        return DEFAULTS
-    import os
-    config_path = os.path.join(project_dir, ".claude", "n8n-knowledge.local.md")
-    if not os.path.exists(config_path):
-        return DEFAULTS
-    config = dict(DEFAULTS)
-    try:
-        with open(config_path) as f:
-            content = f.read()
-        in_frontmatter = False
-        for line in content.splitlines():
-            if line.strip() == "---":
-                if in_frontmatter:
-                    break
-                in_frontmatter = True
-                continue
-            if in_frontmatter and ":" in line:
-                key, _, val = line.partition(":")
-                key = key.strip()
-                val = val.strip().strip('"').strip("'")
-                if key in DEFAULTS:
-                    try:
-                        config[key] = type(DEFAULTS[key])(val)
-                    except (ValueError, TypeError):
-                        pass
-    except Exception:
-        pass
-    return config
+from plugin_config import DEFAULTS, load_config
 
 
 def detect_source(tags):

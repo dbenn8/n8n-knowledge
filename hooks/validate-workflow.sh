@@ -56,7 +56,7 @@ print("fire")
 PYEOF
 ) || exit 0
   if [ "$SHOULD_VALIDATE" = "cap_reached" ]; then
-    CAP_CTX=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "Validator limit reached for this session. No further validator feedback will be injected. Avoid looping on more workflow edits just to chase validation. Either return your best final workflow now, or explain clearly what remaining issue is blocking completion." 2>/dev/null) || exit 0
+    CAP_CTX=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "Validator limit reached for this session. No further validator feedback will be injected. The last file you wrote is the output. If the workflow is incomplete, explain what is still missing." 2>/dev/null) || exit 0
     echo "$CAP_CTX"
     exit 0
   fi
@@ -85,26 +85,54 @@ RESULT=$(python3 "$LIB_DIR/validator_client.py" "$WORKFLOW_TMP" "$CWD" 2>/dev/nu
 [ -n "$RESULT" ] || exit 0
 
 VALID=$(printf '%s' "$RESULT" | python3 -c "import json,sys;print('true' if json.load(sys.stdin).get('valid') else 'false')" 2>/dev/null) || exit 0
+
+# Apply generic auto-fixes (unambiguous, node-agnostic) before injecting feedback.
+# If any fixes apply, re-validate so the model sees the updated state.
+AUTOFIX_JSON="{}"
+if [ "$VALID" = "false" ]; then
+  AUTOFIX_JSON=$(python3 "$LIB_DIR/workflow_autofix.py" "$WORKFLOW_TMP" "$RESULT" 2>/dev/null) || AUTOFIX_JSON="{}"
+  if printf '%s' "$AUTOFIX_JSON" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('changes') else 1)" 2>/dev/null; then
+    cp "$WORKFLOW_TMP" "$FILE_PATH" 2>/dev/null || true
+    # Telemetry: when an external harness sets N8N_KNOWLEDGE_AUTOFIX_LOG, record each
+    # autofix fire (one JSON line). Unset in production -> no file written, no side effect.
+    if [ -n "${N8N_KNOWLEDGE_AUTOFIX_LOG:-}" ]; then
+      printf '%s\n' "$AUTOFIX_JSON" >> "$N8N_KNOWLEDGE_AUTOFIX_LOG" 2>/dev/null || true
+    fi
+    RESULT=$(python3 "$LIB_DIR/validator_client.py" "$WORKFLOW_TMP" "$CWD" 2>/dev/null) || exit 0
+    [ -n "$RESULT" ] || exit 0
+    VALID=$(printf '%s' "$RESULT" | python3 -c "import json,sys;print('true' if json.load(sys.stdin).get('valid') else 'false')" 2>/dev/null) || exit 0
+  fi
+fi
+
 if [ "$VALID" = "true" ]; then
-  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" python3 - 2>/dev/null << 'PYEOF'
+  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
 result = json.loads(os.environ["RESULT_JSON"])
+autofix = json.loads(os.environ.get("AUTOFIX_JSON") or "{}")
 file_path = os.environ["FILE_PATH"]
 mode = result.get("validator_mode") or "unknown"
 node_count = result.get("node_count", 0)
 trigger_count = result.get("trigger_count", 0)
+auto_changes = autofix.get("changes") or []
 
 header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
     f"Validation passed. Nodes: {node_count}. Trigger nodes: {trigger_count}.",
-    "The current workflow JSON is valid. Stop editing this workflow unless you are intentionally changing requirements.",
-    "Copy the exact current file contents verbatim into your final ```json``` block. Do not rewrite the workflow from memory or add a prose summary before the JSON.",
-    "Return your final answer now.",
 ]
+if auto_changes:
+    body.append("")
+    body.append("Auto-patched (verify these are correct before accepting as final):")
+    body.extend(f"  - {c}" for c in auto_changes)
+body.extend([
+    "",
+    "Schema check passed. Before stopping, verify: does this workflow fully solve the user's original request? Are all required nodes and connections present?",
+    "- YES → The saved file is the importable output. Tell the user the filename and that they can import it directly into n8n.",
+    "- NO → Add the missing steps, re-save, and wait for the next validation result.",
+])
 print("\n".join(body).join([header + "\n", ""]))
 PYEOF
   ) || exit 0
@@ -114,15 +142,17 @@ PYEOF
   exit 0
 fi
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" python3 - 2>/dev/null << 'PYEOF'
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
 result = json.loads(os.environ["RESULT_JSON"])
+autofix = json.loads(os.environ.get("AUTOFIX_JSON") or "{}")
 file_path = os.environ["FILE_PATH"]
 mode = result.get("validator_mode") or "unknown"
 feedback = result.get("feedback_block", "").strip()
 issues = result.get("issues_block", "").strip()
+auto_changes = autofix.get("changes") or []
 if not feedback:
     raise SystemExit(1)
 
@@ -130,9 +160,15 @@ header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
-    "The written workflow JSON is currently invalid. Fix these issues before moving on:",
-    feedback,
 ]
+if auto_changes:
+    body.extend([
+        "Auto-patched (verify these are correct):",
+    ] + [f"  - {c}" for c in auto_changes] + [""])
+    body.append("Remaining issues to fix manually:")
+else:
+    body.append("The written workflow JSON is currently invalid. Fix these issues before moving on:")
+body.append(feedback)
 if issues:
     body.extend([
         "",

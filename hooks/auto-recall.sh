@@ -6,6 +6,21 @@ source "$SCRIPT_DIR/lib/detect-n8n.sh"
 source "$SCRIPT_DIR/lib/recall.sh"
 source "$SCRIPT_DIR/lib/structured_recall.sh"
 
+# Build the workflow-validation build instructions (empty unless validation is enabled).
+# Kept as a function so it can be injected on BOTH the recall-fired and recall-skipped
+# paths — the build protocol must reach the model whenever the user is building a
+# workflow, independent of whether semantic recall happened to trigger.
+build_validator_guidance() {
+  [ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-false}" = "true" ] || return 0
+  # Generic, real-world plugin behavior: explain the validator feedback loop the model
+  # will receive. This does NOT dictate where to save (that is the host's/user's choice,
+  # or — in the eval — a neutral directive in the shared system prompt for all conditions).
+  printf '%s' "## n8n Workflow Build Instructions
+Build the workflow by writing it to a .json file and editing THAT file as you go — the validator runs automatically on each file write and returns targeted feedback. The saved file is the importable deliverable; build it there rather than only describing or pasting it.
+- INVALID: make only the targeted edits listed, re-write the file, wait for the next result
+- VALID: verify the workflow fully solves the user's request. Tell the user the filename so they can import it directly into n8n."
+}
+
 # Check if auto-recall is enabled (default: true)
 # Note: Claude Code uppercases all plugin option env var names
 ENABLED="${CLAUDE_PLUGIN_OPTION_ENABLEAUTORECALL:-true}"
@@ -19,7 +34,29 @@ PROMPT=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin)
 CWD=$(echo "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('cwd',''))")
 
 # Check if we should recall
-if [ "$(should_recall "$PROMPT" "$CWD")" != "yes" ]; then
+RECALL_DECISION=$(should_recall "$PROMPT" "$CWD")
+if [ "$RECALL_DECISION" != "yes" ]; then
+  # Log skip reason for eval analysis
+  DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
+  if [ "$DEBUG" != "off" ]; then
+    python3 -c "
+import sys, datetime
+sys.path.insert(0, '$SCRIPT_DIR/lib')
+prompt_preview = sys.argv[1][:80].replace('\n', ' ')
+with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
+    f.write(f'[{datetime.datetime.now().strftime(\"%H:%M:%S\")}] auto-recall SKIP | prompt: {prompt_preview!r}\n')
+" "$PROMPT" 2>/dev/null || true
+  fi
+  # Recall was skipped, but workflow build instructions (and eval-mode output folder)
+  # must still reach the model if validation is enabled — they are not recall-dependent.
+  SKIP_GUIDANCE=$(build_validator_guidance)
+  if [ -n "$SKIP_GUIDANCE" ]; then
+    SKIP_GUIDANCE_CONTENT="$SKIP_GUIDANCE" python3 -c "
+import json, os
+g = os.environ['SKIP_GUIDANCE_CONTENT']
+print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':g}}))
+" 2>/dev/null || true
+  fi
   exit 0
 fi
 
@@ -31,7 +68,9 @@ trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"' EXIT
 do_recall "$PROMPT" "low" > "$TMPFILE"
 
 # Check for node names in the prompt and do structured + gotcha recall if found
-NODE_TYPE=$(python3 -c "
+# Also capture all detected nodes for DB schema injection
+PROMPT_JSON=$(printf '%s' "$PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+NODE_DETECT=$(python3 -c "
 import sys, json
 sys.path.insert(0, '$SCRIPT_DIR/lib')
 from node_lookup import identify_nodes
@@ -39,7 +78,10 @@ prompt = json.loads(sys.stdin.read())
 hits = identify_nodes(prompt)
 if hits:
     print(hits[0][1])
-" <<< "$(printf '%s' "$PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" 2>/dev/null || true)
+    print(' '.join(nt for _, nt in hits))
+" <<< "$PROMPT_JSON" 2>/dev/null || true)
+NODE_TYPE=$(echo "$NODE_DETECT" | sed -n '1p')
+NODE_TYPES=$(echo "$NODE_DETECT" | sed -n '2p')
 
 if [ -n "$NODE_TYPE" ]; then
   # Run node-spec and gotcha recalls in parallel
@@ -73,10 +115,89 @@ except Exception:
 " "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE" 2>/dev/null || true
 fi
 
+# Inject compact node schema from nodes.db (valid operation enums per resource)
+DB_INJECT=""
+if [ -n "$NODE_TYPES" ]; then
+  # shellcheck disable=SC2086  # word splitting intentional — NODE_TYPES is space-separated
+  DB_INJECT=$(python3 "$SCRIPT_DIR/lib/nodes_db_inject.py" $NODE_TYPES 2>/dev/null || true)
+fi
+
 # Format and output results (pass CWD for .local.md config lookup)
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
+# Cap recall-only context at 10K so large recall results never spill to a file.
+if [ -z "$DB_INJECT" ] && [ -n "$RESULT" ]; then
+  RESULT=$(python3 -c "
+import json, sys
+MAX_CTX = 10000
+raw = sys.stdin.read().strip()
+if not raw: sys.exit(0)
+try:
+    data = json.loads(raw)
+    ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
+    if len(ctx) > MAX_CTX:
+        ctx = ctx[:MAX_CTX] + '\n... (recall truncated to stay inline)'
+        data.setdefault('hookSpecificOutput', {})['additionalContext'] = ctx
+    print(json.dumps(data))
+except Exception:
+    print(raw)
+" <<< "$RESULT" 2>/dev/null || echo "$RESULT")
+fi
+
+# DB injection goes FIRST — it contains must-have schema (valid operation enums).
+# Recall results come after and can be truncated if needed.
+# This ensures the critical build data is always inline, never spills to a skipped file.
+if [ -n "$DB_INJECT" ]; then
+  RESULT=$(DB_INJECT_CONTENT="$DB_INJECT" python3 -c "
+import json, sys, os
+# Keep total additionalContext under 10K so it stays inline. DB inject is always preserved — recall is trimmed.
+MAX_CTX = 10000
+extra = os.environ['DB_INJECT_CONTENT']
+raw = sys.stdin.read().strip()
+if raw:
+    try:
+        data = json.loads(raw)
+        existing = data.get('hookSpecificOutput', {}).get('additionalContext', '')
+        combined = (extra + '\n\n' + existing).strip()
+        if len(combined) > MAX_CTX:
+            combined = combined[:MAX_CTX] + '\n... (recall truncated to stay inline)'
+        data.setdefault('hookSpecificOutput', {})['additionalContext'] = combined
+        data['hookSpecificOutput']['hookEventName'] = 'UserPromptSubmit'
+        print(json.dumps(data))
+    except Exception:
+        print(raw)
+else:
+    out = {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': extra}}
+    print(json.dumps(out))
+" <<< "$RESULT" 2>/dev/null || echo "$RESULT")
+fi
+
+# Prepend validator behavioral guidance when workflow validation is enabled.
+# This ensures the model understands the validation protocol in any deployment context.
+VALIDATOR_GUIDANCE=$(build_validator_guidance)
+if [ -n "$VALIDATOR_GUIDANCE" ]; then
+  RESULT=$(VALIDATOR_GUIDANCE_CONTENT="$VALIDATOR_GUIDANCE" python3 -c "
+import json, sys, os
+guidance = os.environ['VALIDATOR_GUIDANCE_CONTENT']
+raw = sys.stdin.read().strip()
+if raw:
+    try:
+        data = json.loads(raw)
+        existing = data.get('hookSpecificOutput', {}).get('additionalContext', '')
+        combined = (guidance + ('\n\n' + existing if existing else '')).strip()
+        data.setdefault('hookSpecificOutput', {})['additionalContext'] = combined
+        data['hookSpecificOutput']['hookEventName'] = 'UserPromptSubmit'
+        print(json.dumps(data))
+    except Exception:
+        print(raw)
+else:
+    out = {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': guidance}}
+    print(json.dumps(out))
+" <<< "$RESULT" 2>/dev/null || echo "$RESULT")
+fi
+
 # Debug mode: off, summary (default — condensed), full (complete with formatting)
+# Runs AFTER DB inject merge so log reflects what Claude actually receives.
 # Output written to /tmp/n8n-knowledge-debug.log — tail -f in another terminal to watch
 DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
@@ -87,7 +208,16 @@ from debug_formatter import format_debug
 data = json.load(sys.stdin)
 ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
 if ctx:
+    has_db = '## n8n Node Schema' in ctx
+    if has_db:
+        # Measure DB inject block: everything before recall preamble (or full ctx if no recall)
+        db_end = ctx.find('*** n8n Knowledge Base')
+        db_chars = db_end if db_end != -1 else len(ctx)
+    else:
+        db_chars = 0
+    summary_line = f'[ctx={len(ctx)}chars, db_inject={has_db}, db_chars={db_chars}]\n'
     with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
+        f.write(summary_line)
         f.write(format_debug(ctx, '$DEBUG', 'auto-recall'))
 " 2>/dev/null || true
 fi

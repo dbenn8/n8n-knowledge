@@ -74,6 +74,12 @@ def maybe_get_node_field(
     return f"nodes[name={node_name}].parameters.{field_name}", None
 
 
+def strip_matching_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
 def rewrite_message(message: str) -> str:
     msg = normalize_message(message)
 
@@ -117,6 +123,28 @@ def rewrite_message(message: str) -> str:
             "Replace the invalid operator with one that the validator supports for that field type, and patch "
             "only the failing operator field. "
             f"(validator: {msg})"
+        )
+
+    invalid_value_match = re.match(
+        r"^Invalid value for '([^']+)'\. Must be one of:\s*(.*)$",
+        msg,
+    )
+    if invalid_value_match:
+        field_name = invalid_value_match.group(1)
+        allowed_values = invalid_value_match.group(2).strip()
+        allowed_suffix = f" Allowed values: {allowed_values}." if allowed_values else ""
+        return (
+            f"Replace only the invalid `{field_name}` value with one validator-accepted value."
+            " If the field is a select/resource-locator object, keep that object shape and patch just its failing"
+            f" selection value or mode.{allowed_suffix} (validator: {msg})"
+        )
+
+    required_match = re.match(r"^Required property '([^']+)' cannot be empty$", msg)
+    if required_match:
+        field_label = required_match.group(1)
+        return (
+            f"Fill the missing required field `{field_label}` with a non-empty schema-valid value, and leave"
+            f" unrelated fields unchanged. (validator: {msg})"
         )
 
     if msg == "Webhook path is required":
@@ -229,6 +257,52 @@ def build_structured_issues(
         if message.startswith("Operation '") and "not valid for type" in message:
             action = (
                 "Patch only the invalid operator value at the failing IF/filter rule. Do not rewrite the full workflow."
+            )
+            fix_strategy = "replace_field"
+
+        invalid_value_match = re.match(
+            r"^Invalid value for '([^']+)'\. Must be one of:\s*(.*)$",
+            message,
+        )
+        if invalid_value_match:
+            field_name = invalid_value_match.group(1)
+            allowed_values = [
+                strip_matching_quotes(part.strip())
+                for part in invalid_value_match.group(2).split(",")
+                if part.strip()
+            ]
+            if node_name and workflow is not None:
+                path, current_value = maybe_get_node_field(workflow, node_name, field_name)
+            elif field_name:
+                path = field_name
+
+            action = f"Replace only the invalid `{field_name}` value with one validator-accepted option."
+            if allowed_values:
+                preview_values = ", ".join(allowed_values[:6])
+                if len(allowed_values) > 6:
+                    preview_values += ", ..."
+                action += f" Allowed values: {preview_values}."
+
+            if isinstance(current_value, dict) and current_value.get("__rl") is True:
+                locator_value = current_value.get("value")
+                locator_mode = current_value.get("mode")
+                locator_path = f"{path}.value" if path else "the resource locator value"
+                action = (
+                    f"Keep the existing resource-locator object at `{path}`. Replace only `{locator_path}`"
+                    " with a validator-accepted selection and keep a valid `mode` on that same object."
+                )
+                if allowed_values:
+                    action += f" Allowed values: {preview_values}."
+            fix_strategy = "replace_field"
+
+        required_match = re.match(
+            r"^Required property '([^']+)' cannot be empty$",
+            message,
+        )
+        if required_match:
+            field_label = required_match.group(1)
+            action = (
+                f"Fill the required field `{field_label}` with a non-empty schema-valid value. Do not rewrite unrelated fields."
             )
             fix_strategy = "replace_field"
 

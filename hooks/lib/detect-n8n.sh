@@ -84,6 +84,18 @@ should_recall() {
     if printf '%s' "$lower_message" | grep -qEi "\b($kw_regex)\b"; then
       echo "yes"; return
     fi
+
+    # Check node names from lookup dictionary — auto-updates as lookup grows
+    local lib_dir
+    lib_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/lib"
+    if NODE_LOOKUP_LIB="$lib_dir" python3 -c "
+import sys, os
+sys.path.insert(0, os.environ['NODE_LOOKUP_LIB'])
+from node_lookup import identify_nodes
+sys.exit(0 if identify_nodes(sys.argv[1]) else 1)
+" "$message" 2>/dev/null; then
+      echo "yes"; return
+    fi
   fi
 
   echo "no"

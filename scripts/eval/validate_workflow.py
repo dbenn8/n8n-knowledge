@@ -9,96 +9,13 @@ Usage:
     python3 scripts/eval/validate_workflow.py out/eval/<run-dir>
     python3 scripts/eval/validate_workflow.py out/eval/<run-dir> --details
 """
-import json
 import glob
+import json
 import os
 import re
-import subprocess
 import sys
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VALIDATOR_JS = os.path.join(SCRIPT_DIR, "validate-with-mcp.js")
-
-
-def extract_workflow_json(response_text):
-    """Extract n8n workflow JSON from a Claude response.
-
-    Looks for ```json code blocks containing workflow structure,
-    then falls back to bare JSON object detection.
-    """
-    json_blocks = re.findall(r'```(?:json)?\s*\n(.*?)```', response_text, re.DOTALL)
-
-    for block in json_blocks:
-        try:
-            obj = json.loads(block.strip())
-            if isinstance(obj, dict) and ("nodes" in obj or "connections" in obj):
-                return obj, None
-        except json.JSONDecodeError:
-            continue
-
-    brace_starts = [m.start() for m in re.finditer(r'\{', response_text)]
-    for start in brace_starts:
-        try:
-            candidate = response_text[start:]
-            depth = 0
-            end = 0
-            for i, ch in enumerate(candidate):
-                if ch == '{':
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
-            snippet = candidate[:end]
-            if len(snippet) > 200:
-                obj = json.loads(snippet)
-                if isinstance(obj, dict) and ("nodes" in obj or "connections" in obj):
-                    return obj, None
-        except (json.JSONDecodeError, ValueError):
-            continue
-
-    return None, "no_json_found"
-
-
-def validate_with_mcp(workflow_json):
-    """Run n8n-mcp's full validator on a workflow JSON object."""
-    try:
-        proc = subprocess.run(
-            ["node", VALIDATOR_JS],
-            input=json.dumps(workflow_json),
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if proc.returncode != 0:
-            return {
-                "valid": False,
-                "error_count": 1,
-                "warning_count": 0,
-                "errors": [{"type": "validator_crash", "message": proc.stderr[:200]}],
-                "warnings": [],
-                "statistics": {},
-            }
-        return json.loads(proc.stdout)
-    except subprocess.TimeoutExpired:
-        return {
-            "valid": False,
-            "error_count": 1,
-            "warning_count": 0,
-            "errors": [{"type": "timeout", "message": "Validator timed out after 15s"}],
-            "warnings": [],
-            "statistics": {},
-        }
-    except Exception as e:
-        return {
-            "valid": False,
-            "error_count": 1,
-            "warning_count": 0,
-            "errors": [{"type": "error", "message": str(e)}],
-            "warnings": [],
-            "statistics": {},
-        }
+from workflow_validation import extract_workflow_json, validate_with_mcp
 
 
 def analyze_results(results_dir, show_details=False):
@@ -114,7 +31,12 @@ def analyze_results(results_dir, show_details=False):
 
         results = []
         response_files = sorted(glob.glob(os.path.join(cond_dir, "*.json")))
-        response_files = [f for f in response_files if not f.endswith(".meta.json")]
+        response_files = [
+            f for f in response_files
+            if not f.endswith(".meta.json")
+            and not f.endswith(".validation.json")
+            and ".attempt" not in os.path.basename(f)
+        ]
 
         for response_file in response_files:
             try:
