@@ -45,6 +45,29 @@ def _find_db():
     return None
 
 
+def _extract_resource_locator_fields(props_json):
+    """Return {field_name: [mode_names]} for resourceLocator-type properties."""
+    try:
+        props = json.loads(props_json)
+    except Exception:
+        return {}
+    fields = {}
+    for prop in props:
+        if prop.get("type") != "resourceLocator":
+            continue
+        name = prop.get("name", "")
+        if not name or name in fields:
+            continue
+        modes = []
+        for m in prop.get("modes", []):
+            mode_name = m.get("name", "")
+            if mode_name:
+                modes.append(mode_name)
+        if modes:
+            fields[name] = modes
+    return fields
+
+
 def build_cheatsheet(node_types, db_path=None):
     """Return a compact schema cheatsheet string, or None if unavailable."""
     if not node_types:
@@ -63,31 +86,54 @@ def build_cheatsheet(node_types, db_path=None):
 
     for nt in node_types[:_MAX_NODES]:
         row = db.execute(
-            "SELECT display_name, version, operations FROM nodes WHERE node_type=?",
+            "SELECT display_name, version, operations, properties_schema FROM nodes WHERE node_type=?",
             (nt,),
         ).fetchone()
 
         if not row:
             continue
 
-        display_name, version, ops_json = row
-        if not ops_json:
-            continue
-
-        ops = json.loads(ops_json)
-        by_resource = {}
-        for op in ops:
-            r = op.get("resource", "")
-            by_resource.setdefault(r, []).append(op["operation"])
+        display_name, version, ops_json, props_json = row
 
         # Restore full node type for Claude (nodes-base.slack → n8n-nodes-base.slack)
         full_nt = f"n8n-{nt}" if nt.startswith("nodes-") else nt
 
         lines = [f"### {display_name} ({full_nt}, typeVersion {version})"]
-        lines.append("Valid resource/operation combinations — use these EXACT values:")
-        for res in sorted(by_resource):
-            ops_str = " | ".join(sorted(by_resource[res]))
-            lines.append(f'  resource="{res}": operation must be one of: {ops_str}')
+
+        if ops_json:
+            ops = json.loads(ops_json)
+            by_resource = {}
+            for op in ops:
+                r = op.get("resource", "")
+                by_resource.setdefault(r, []).append(op["operation"])
+            lines.append("Valid resource/operation combinations — use these EXACT values:")
+            for res in sorted(by_resource):
+                ops_str = " | ".join(sorted(by_resource[res]))
+                lines.append(f'  resource="{res}": operation must be one of: {ops_str}')
+
+        if props_json:
+            rl_fields = _extract_resource_locator_fields(props_json)
+            if rl_fields:
+                lines.append("Resource locator fields — must use object format, NOT bare strings:")
+                for field_name, modes in rl_fields.items():
+                    modes_str = " | ".join(modes)
+                    lines.append(
+                        f'  {field_name}: {{"__rl": true, "value": "...", "mode": "{modes[0]}"}}'
+                        f"  (modes: {modes_str})"
+                    )
+            has_filter = any(
+                p.get("type") == "filter" for p in json.loads(props_json)
+            )
+            if has_filter:
+                lines.append("IF/Filter conditions — use this EXACT structure (v2):")
+                lines.append('  "conditions": {"combinator": "and", "conditions": [')
+                lines.append('    {"id": "...", "leftValue": "={{ $json.field }}", '
+                             '"rightValue": "...",')
+                lines.append('     "operator": {"type": "string", "operation": "equals"}}]}')
+                lines.append('  Valid operator types: string, number, boolean, dateTime')
+                lines.append('  String operations: equals, notEquals, contains, '
+                             'startsWith, endsWith, regex')
+                lines.append('  Number operations: equals, notEquals, gt, gte, lt, lte')
 
         sections.append("\n".join(lines))
 
