@@ -197,10 +197,22 @@ echo "  Condition advance threshold: $CONDITION_ADVANCE_THRESHOLD"
 echo "  Max in-flight runs: $MAX_IN_FLIGHT_RUNS"
 echo "  Model timeout: ${MODEL_TIMEOUT_SECONDS}s (0=disabled)"
 echo "  Batch size: ${BATCH_SIZE} (0=all parallel)"
+echo "  Plugin validator: mode=${EVAL_PLUGIN_VALIDATOR_MODE:-default} cloud_url=${EVAL_PLUGIN_VALIDATOR_CLOUD_URL:-<unset>} local_path=${EVAL_PLUGIN_VALIDATOR_LOCAL_PATH:-<auto>}"
+if [ -n "${EVAL_SCORING_VALIDATOR_MODE:-}" ]; then
+  scoring_mode_display="$EVAL_SCORING_VALIDATOR_MODE"
+elif [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-0}" = "1" ]; then
+  scoring_mode_display="same-as-plugin"
+else
+  scoring_mode_display="local"
+fi
+echo "  Scoring validator: mode=${scoring_mode_display} cloud_url=${EVAL_SCORING_VALIDATOR_CLOUD_URL:-<unset>} local_path=${EVAL_SCORING_VALIDATOR_LOCAL_PATH:-<auto>}"
 if [ -n "$RESUME" ]; then
   echo "  Resume from: $RESUME"
 fi
 echo "  Output: $RESULTS_DIR"
+echo ""
+
+python3 "$SCRIPT_DIR/validator_preflight.py"
 echo ""
 
 # Resume: seed output dir with prior results so run_one can skip completed prompts

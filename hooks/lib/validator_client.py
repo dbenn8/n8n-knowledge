@@ -16,6 +16,7 @@ import urllib.request
 from typing import Any
 
 from plugin_config import resolve_validator_target
+from validator_metadata import build_local_validator_info, fetch_cloud_health
 from validator_enrichment import (
     build_issue_block,
     build_structured_issues,
@@ -52,6 +53,7 @@ def shape_result(
         "statistics": validation.get("statistics", {}),
         "suggestions": validation.get("suggestions", []),
         "validator_mode": mode,
+        "validator_info": validation.get("validator_info"),
     }
 
 
@@ -82,7 +84,10 @@ def validate_local(workflow: dict[str, Any], local_root: str) -> dict[str, Any]:
             "statistics": {},
             "suggestions": [],
         }
-    return json.loads(proc.stdout)
+    result = json.loads(proc.stdout)
+    if isinstance(result, dict):
+        result.setdefault("validator_info", build_local_validator_info(local_root))
+    return result
 
 
 def validate_cloud(workflow: dict[str, Any], url: str) -> dict[str, Any]:
@@ -95,7 +100,15 @@ def validate_cloud(workflow: dict[str, Any], url: str) -> dict[str, Any]:
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            result = json.loads(resp.read().decode("utf-8"))
+            if isinstance(result, dict) and not result.get("validator_info"):
+                try:
+                    health = fetch_cloud_health(url, timeout_seconds=10)
+                except Exception:
+                    health = None
+                if isinstance(health, dict):
+                    result["validator_info"] = health.get("validator_info")
+            return result
     except urllib.error.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
         return {

@@ -8,6 +8,8 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,14 @@ HOOKS_LIB = os.path.join(REPO_DIR, "hooks", "lib")
 if HOOKS_LIB not in sys.path:
     sys.path.insert(0, HOOKS_LIB)
 
+from plugin_config import resolve_validator_target_config
+from validator_metadata import (
+    build_local_validator_info,
+    build_validator_descriptor,
+    compare_validator_descriptors,
+    copy_descriptor,
+    fetch_cloud_health,
+)
 from validator_enrichment import (
     build_issue_block,
     build_structured_issues,
@@ -25,6 +35,67 @@ from validator_enrichment import (
 )
 
 VALIDATOR_JS = os.path.join(SCRIPT_DIR, "validate-with-mcp.js")
+
+
+def _build_plugin_validator_config_from_env() -> dict[str, Any]:
+    return {
+        "validator_mode": os.environ.get("EVAL_PLUGIN_VALIDATOR_MODE", "").strip() or "default",
+        "validator_cloud_url": os.environ.get("EVAL_PLUGIN_VALIDATOR_CLOUD_URL", "").strip(),
+        "validator_local_path": os.environ.get("EVAL_PLUGIN_VALIDATOR_LOCAL_PATH", "").strip(),
+    }
+
+
+def resolve_eval_plugin_validator_target() -> dict[str, Any]:
+    config = _build_plugin_validator_config_from_env()
+    return resolve_validator_target_config(config, mode_override=config.get("validator_mode"))
+
+
+def resolve_scoring_validator_target() -> dict[str, Any]:
+    plugin_target = resolve_eval_plugin_validator_target()
+    raw_scoring_mode = os.environ.get("EVAL_SCORING_VALIDATOR_MODE", "").strip().lower()
+    if not raw_scoring_mode:
+        raw_scoring_mode = (
+            "same-as-plugin"
+            if os.environ.get("EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION", "0") == "1"
+            else "local"
+        )
+
+    if raw_scoring_mode == "same-as-plugin":
+        scoring_target = copy_descriptor(plugin_target)
+        scoring_target["requested_mode"] = "same-as-plugin"
+        scoring_target["reason"] = (
+            "scoring validator uses the same effective target as plugin validation"
+        )
+        return scoring_target
+
+    scoring_mode = raw_scoring_mode if raw_scoring_mode in {"default", "local", "cloud"} else "local"
+    scoring_config = {
+        "validator_mode": scoring_mode,
+        "validator_cloud_url": (
+            os.environ.get("EVAL_SCORING_VALIDATOR_CLOUD_URL", "").strip()
+            or plugin_target.get("cloud_url")
+            or ""
+        ),
+        "validator_local_path": (
+            os.environ.get("EVAL_SCORING_VALIDATOR_LOCAL_PATH", "").strip()
+            or os.environ.get("EVAL_PLUGIN_VALIDATOR_LOCAL_PATH", "").strip()
+        ),
+    }
+    return resolve_validator_target_config(scoring_config, mode_override=scoring_mode)
+
+
+def describe_validator_target(target: dict[str, Any]) -> dict[str, Any]:
+    if target.get("effective_mode") == "cloud" and target.get("cloud_url"):
+        try:
+            health_payload = fetch_cloud_health(target["cloud_url"], timeout_seconds=10)
+        except Exception as exc:
+            descriptor = build_validator_descriptor(target)
+            descriptor["status"] = "unavailable"
+            descriptor["detail"] = str(exc)
+            return descriptor
+        return build_validator_descriptor(target, health_payload=health_payload)
+
+    return build_validator_descriptor(target)
 
 
 def extract_workflow_json(response_text: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -64,8 +135,9 @@ def extract_workflow_json(response_text: str) -> tuple[dict[str, Any] | None, st
     return None, "no_json_found"
 
 
-def validate_with_mcp(workflow_json: dict[str, Any]) -> dict[str, Any]:
-    """Run n8n-mcp's validator on a workflow JSON object."""
+def _validate_local(workflow_json: dict[str, Any], local_root: str) -> dict[str, Any]:
+    env = dict(os.environ)
+    env["N8N_MCP_INSTALL_ROOT"] = local_root
     try:
         proc = subprocess.run(
             ["node", VALIDATOR_JS],
@@ -73,6 +145,7 @@ def validate_with_mcp(workflow_json: dict[str, Any]) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=15,
+            env=env,
         )
         if proc.returncode != 0:
             return {
@@ -83,7 +156,11 @@ def validate_with_mcp(workflow_json: dict[str, Any]) -> dict[str, Any]:
                 "warnings": [],
                 "statistics": {},
             }
-        return json.loads(proc.stdout)
+        result = json.loads(proc.stdout)
+        if isinstance(result, dict):
+            result.setdefault("validator_mode", "local")
+            result.setdefault("validator_info", build_local_validator_info(local_root))
+        return result
     except subprocess.TimeoutExpired:
         return {
             "valid": False,
@@ -93,6 +170,76 @@ def validate_with_mcp(workflow_json: dict[str, Any]) -> dict[str, Any]:
             "warnings": [],
             "statistics": {},
         }
+
+
+def _validate_cloud(workflow_json: dict[str, Any], url: str) -> dict[str, Any]:
+    body = json.dumps({"workflow": workflow_json}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            if isinstance(result, dict) and not result.get("validator_info"):
+                try:
+                    health_payload = fetch_cloud_health(url, timeout_seconds=10)
+                except Exception:
+                    health_payload = None
+                if isinstance(health_payload, dict):
+                    result["validator_info"] = health_payload.get("validator_info")
+            if isinstance(result, dict):
+                result.setdefault("validator_mode", "cloud")
+            return result
+    except urllib.error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        return {
+            "valid": False,
+            "error_count": 1,
+            "warning_count": 0,
+            "errors": [
+                {
+                    "type": "validator_http_error",
+                    "message": f"cloud validator returned HTTP {exc.code}: {text[:300]}",
+                }
+            ],
+            "warnings": [],
+            "statistics": {},
+        }
+    except Exception as exc:
+        return {
+            "valid": False,
+            "error_count": 1,
+            "warning_count": 0,
+            "errors": [{"type": "validator_request_error", "message": str(exc)}],
+            "warnings": [],
+            "statistics": {},
+        }
+
+
+def validate_with_mcp(workflow_json: dict[str, Any]) -> dict[str, Any]:
+    """Run the configured eval validator on a workflow JSON object."""
+    try:
+        target = resolve_scoring_validator_target()
+        mode = target.get("effective_mode")
+        if mode == "local" and target.get("local_root"):
+            return _validate_local(workflow_json, target["local_root"])
+        if mode == "cloud" and target.get("cloud_url"):
+            return _validate_cloud(workflow_json, target["cloud_url"])
+
+        reason = target.get("reason") or "validator target is not configured"
+        return {
+            "valid": False,
+            "error_count": 1,
+            "warning_count": 0,
+            "errors": [{"type": "validator_not_configured", "message": reason}],
+            "warnings": [],
+            "statistics": {},
+            "validator_info": None,
+            "validator_mode": None,
+        }
     except Exception as exc:
         return {
             "valid": False,
@@ -101,6 +248,8 @@ def validate_with_mcp(workflow_json: dict[str, Any]) -> dict[str, Any]:
             "errors": [{"type": "error", "message": str(exc)}],
             "warnings": [],
             "statistics": {},
+            "validator_info": None,
+            "validator_mode": None,
         }
 
 
