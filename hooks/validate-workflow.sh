@@ -142,7 +142,77 @@ PYEOF
   exit 0
 fi
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" python3 - 2>/dev/null << 'PYEOF'
+# Extract node types from the workflow that have validation errors, then inject
+# their correct schemas alongside the feedback. This gives the model the exact
+# valid operation/resource values it needs to self-correct — the same data MCP
+# gets via on-demand tool calls, delivered through the validator feedback loop.
+NODE_SPEC_BLOCK=""
+NODE_SPEC_BLOCK=$(python3 - "$WORKFLOW_TMP" "$RESULT" "$LIB_DIR" 2>/dev/null << 'PYEOF' || true
+import json
+import os
+import re
+import sys
+
+workflow_path, result_json, lib_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, lib_dir)
+from nodes_db_inject import build_cheatsheet
+
+workflow = json.load(open(workflow_path))
+result = json.loads(result_json)
+
+# Collect node types that have errors (from issues and repair_messages)
+error_node_names = set()
+for issue in result.get("issues", []):
+    name = issue.get("node")
+    if name:
+        error_node_names.add(name)
+
+# Also extract node names from repair messages (e.g., 'for node n8n-nodes-base.X')
+for msg in result.get("repair_messages", []):
+    for m in re.finditer(r'node (n8n-[\w.-]+)', msg):
+        # This is a node type, not a name — track it directly
+        pass
+
+# Map error node names to their node types
+error_node_types = set()
+all_node_types = set()
+for node in workflow.get("nodes", []):
+    node_type = node.get("type", "")
+    all_node_types.add(node_type)
+    if node.get("name") in error_node_names:
+        error_node_types.add(node_type)
+
+# Also catch node types mentioned directly in error messages
+for issue in result.get("issues", []):
+    msg = issue.get("message", "")
+    for m in re.finditer(r'n8n-[\w.-]+', msg):
+        nt = m.group(0)
+        if nt in all_node_types:
+            error_node_types.add(nt)
+
+# If no specific error nodes identified, inject specs for ALL workflow nodes
+# (the validator may not always tag which node caused the error)
+if not error_node_types:
+    error_node_types = all_node_types
+
+# Convert to nodes-base.X format for nodes_db_inject
+db_types = []
+for nt in error_node_types:
+    if nt.startswith("n8n-"):
+        db_types.append(nt[4:])  # n8n-nodes-base.slack -> nodes-base.slack
+    elif nt.startswith("@n8n/n8n-"):
+        db_types.append(nt[9:])  # @n8n/n8n-nodes-langchain.X -> nodes-langchain.X
+    else:
+        db_types.append(nt)
+
+if db_types:
+    cheatsheet = build_cheatsheet(db_types)
+    if cheatsheet:
+        print(cheatsheet)
+PYEOF
+)
+
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -153,6 +223,7 @@ mode = result.get("validator_mode") or "unknown"
 feedback = result.get("feedback_block", "").strip()
 issues = result.get("issues_block", "").strip()
 auto_changes = autofix.get("changes") or []
+node_specs = os.environ.get("NODE_SPECS", "").strip()
 if not feedback:
     raise SystemExit(1)
 
@@ -176,6 +247,11 @@ if issues:
         issues,
         "",
         "Make the smallest targeted edits possible. Do not rewrite unrelated nodes or the whole workflow unless the validator error requires it.",
+    ])
+if node_specs:
+    body.extend([
+        "",
+        node_specs,
     ])
 print("\n".join(body).join([header + "\n", ""]))
 PYEOF

@@ -9,6 +9,8 @@ import os
 import sys
 from collections import defaultdict
 
+from gotcha_scoring import score_gotchas
+
 
 def main() -> int:
     if len(sys.argv) != 2:
@@ -16,6 +18,13 @@ def main() -> int:
         return 2
 
     results_dir = sys.argv[1]
+    # Gotcha-addressed scoring (plugin's headline value: design around known bugs,
+    # which schema validity cannot capture). Heuristic term-match vs response+workflow.
+    gt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ground_truth.jsonl")
+    try:
+        gotcha_scores = score_gotchas(results_dir, gt_path)
+    except Exception:
+        gotcha_scores = {}
     data: dict[str, dict[int, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
     for meta_file in sorted(glob.glob(os.path.join(results_dir, "*", "*.meta.json"))):
@@ -61,6 +70,8 @@ def main() -> int:
         ("Wrote-file runs", "wrote_file_runs"),
         ("Autofix runs", "autofix_runs"),
         ("Avg autofix fixes", "autofix_changes"),
+        ("Gotcha-addressed", "gotcha_addressed"),
+        ("Gotcha-addr rate", "gotcha_rate"),
     ]
 
     for label, key in metrics:
@@ -104,6 +115,15 @@ def main() -> int:
                     if meta.get("workflow_filename")
                 )
                 print(f" {wrote:>14}", end="")
+            elif key == "gotcha_addressed":
+                g = gotcha_scores.get(cond) or {}
+                frac = f"{g.get('addressed', 0)}/{g.get('scored', 0)}"
+                print(f" {frac:>14}", end="")
+            elif key == "gotcha_rate":
+                g = gotcha_scores.get(cond) or {}
+                scored = g.get("scored", 0)
+                rate = (100.0 * g.get("addressed", 0) / scored) if scored else 0.0
+                print(f" {rate:>13.1f}%", end="")
             elif key == "autofix_runs":
                 fired = sum(
                     1 for meta in all_runs
