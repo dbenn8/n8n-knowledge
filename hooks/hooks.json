@@ -10,6 +10,9 @@
     ],
     "PreToolUse": [
       { "matcher": "Task", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/backstop-subagent.sh\"", "timeout": 8 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/check-draft-stop.sh\"", "timeout": 8 } ] }
     ]
   }
 }

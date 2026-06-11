@@ -125,6 +125,35 @@ JSONEOF
     CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true bash "$HOOK")
   assert_contains "default mode keeps re-write guidance" "one complete re-write" "$REWRITE_OUT"
   assert_not_contains "default mode has no marker instructions" "!!DRAFT!!" "$REWRITE_OUT"
+
+  # --- Part 3: draft_pending recording / clearing (Task 4b) ---
+  STATE_DIR_4B="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+  read_pending() {
+    python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('draft_pending',''))" "$1" 2>/dev/null
+  }
+
+  # Surgical INVALID feedback (ran above for session surgical-wording-$$) must
+  # have recorded draft_pending == the INVALID_FILE path.
+  SURGICAL_STATE="$STATE_DIR_4B/surgical-wording-$$.json"
+  assert_eq "surgical INVALID records draft_pending" "$INVALID_FILE" "$(read_pending "$SURGICAL_STATE")"
+
+  # Rewrite-mode INVALID (ran above for session rewrite-wording-$$) must NOT set it.
+  REWRITE_STATE="$STATE_DIR_4B/rewrite-wording-$$.json"
+  assert_eq "rewrite INVALID does not record draft_pending" "" "$(read_pending "$REWRITE_STATE")"
+
+  # Clearing: a VALID validation must remove an existing draft_pending key.
+  CLEAR_FILE="$WORK_DIR/clear.workflow.json"
+  cat > "$CLEAR_FILE" << 'JSONEOF'
+{"nodes": [{"id": "1", "name": "When clicking Test workflow", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 0], "parameters": {}}, {"id": "2", "name": "Edit Fields", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [200, 0], "parameters": {}}], "connections": {"When clicking Test workflow": {"main": [[{"node": "Edit Fields", "type": "main", "index": 0}]]}}}
+JSONEOF
+  CLEAR_STATE="$STATE_DIR_4B/surgical-clear-$$.json"
+  python3 -c "import json,sys;json.dump({'calls':0,'draft_pending':sys.argv[1]}, open(sys.argv[2],'w'))" "$CLEAR_FILE" "$CLEAR_STATE"
+  hook_input "surgical-clear-$$" "$CLEAR_FILE" | \
+    CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true \
+    CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE=surgical bash "$HOOK" > /dev/null || true
+  assert_eq "VALID validation clears draft_pending" "" "$(read_pending "$CLEAR_STATE")"
+
+  rm -f "$SURGICAL_STATE" "$REWRITE_STATE" "$CLEAR_STATE"
 fi
 
 echo ""

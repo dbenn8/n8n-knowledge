@@ -35,7 +35,32 @@ case "$(head -c 9 "$FILE_PATH" 2>/dev/null)" in
 esac
 
 CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
+EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-rewrite}"
 STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+
+# Best-effort draft_pending bookkeeping (Task 4b Stop-hook safety net). Failures
+# must never affect hook output or exit status. ACTION: set|clear.
+update_draft_pending() {
+  # $1 = action (set|clear)
+  [ -n "$SID" ] || return 0
+  python3 - "$STATE_DIR" "$SID" "$1" "$FILE_PATH" 2>/dev/null << 'PYEOF' || true
+import json, os, sys
+state_dir, sid, action, file_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+path = os.path.join(state_dir, f"{sid}.json")
+try:
+    state = json.load(open(path))
+    if not isinstance(state, dict):
+        state = {}
+except Exception:
+    state = {}
+if action == "set":
+    state["draft_pending"] = file_path
+elif action == "clear":
+    state.pop("draft_pending", None)
+with open(path, "w") as f:
+    json.dump(state, f)
+PYEOF
+}
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 if [ -n "$SID" ]; then
@@ -158,6 +183,8 @@ PYEOF
   [ -n "$OK_CTX" ] || exit 0
   OK_OUTPUT=$(python3 "$LIB_DIR/hook_json.py" emit PostToolUse "$OK_CTX" 2>/dev/null) || exit 0
   echo "$OK_OUTPUT"
+  # Validation passed for this file: clear any stuck-draft pending state.
+  update_draft_pending clear
   exit 0
 fi
 
@@ -200,7 +227,7 @@ if db_types:
 PYEOF
 )
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-rewrite}" python3 - 2>/dev/null << 'PYEOF'
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="$EDIT_STYLE" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -276,3 +303,8 @@ PYEOF
 [ -n "$CTX" ] || exit 0
 OUTPUT=$(python3 "$LIB_DIR/hook_json.py" emit PostToolUse "$CTX" 2>/dev/null) || exit 0
 echo "$OUTPUT"
+# Surgical INVALID feedback: record the file as a pending draft so the Stop hook
+# can re-prompt if the model leaves the marker (or removes it with Bash).
+if [ "$EDIT_STYLE" = "surgical" ] && [ -n "$SID" ]; then
+  update_draft_pending set
+fi
