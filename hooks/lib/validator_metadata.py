@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import os
+import sqlite3
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -33,6 +34,31 @@ def _sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _nodes_content_sha256(path: Path) -> str | None:
+    """Stable content hash of the nodes table.
+
+    The physical nodes.db file mutates during normal n8n-mcp use (SQLite change
+    counter, freed pages, FTS internals) without the node data changing, so a
+    whole-file hash produces false mismatches between a fresh install and a
+    used one. Hashing the ordered rows of the nodes table compares the data
+    that actually drives validation. Must stay byte-identical with
+    n8n-hindsight ops-proxy/workflow_validator.py:_nodes_content_sha256.
+    """
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        digest = hashlib.sha256()
+        for row in db.execute("SELECT * FROM nodes ORDER BY node_type"):
+            digest.update(repr(row).encode("utf-8"))
+        return digest.hexdigest()
+    except sqlite3.Error:
+        return None
+    finally:
+        db.close()
+
+
 def build_local_validator_info(local_root: str | None) -> dict[str, Any] | None:
     if not local_root:
         return None
@@ -47,6 +73,9 @@ def build_local_validator_info(local_root: str | None) -> dict[str, Any] | None:
         "configured_n8n_mcp_version": version,
         "installed_n8n_mcp_version": version,
         "nodes_db_sha256": _sha256_file(nodes_db_path) if nodes_db_path.is_file() else None,
+        "nodes_content_sha256": (
+            _nodes_content_sha256(nodes_db_path) if nodes_db_path.is_file() else None
+        ),
     }
 
 
@@ -117,10 +146,19 @@ def compare_validator_descriptors(
     for key in [
         "configured_n8n_mcp_version",
         "installed_n8n_mcp_version",
-        "nodes_db_sha256",
     ]:
         if left_info.get(key) != right_info.get(key):
             diffs.append(f"{key} differs: {left_info.get(key)!r} != {right_info.get(key)!r}")
+
+    # Node database comparison: prefer the logical content hash (stable across
+    # SQLite runtime bookkeeping) when both sides expose it; fall back to the
+    # physical file hash for older validators that only report nodes_db_sha256.
+    if left_info.get("nodes_content_sha256") and right_info.get("nodes_content_sha256"):
+        db_key = "nodes_content_sha256"
+    else:
+        db_key = "nodes_db_sha256"
+    if left_info.get(db_key) != right_info.get(db_key):
+        diffs.append(f"{db_key} differs: {left_info.get(db_key)!r} != {right_info.get(db_key)!r}")
     return diffs
 
 
