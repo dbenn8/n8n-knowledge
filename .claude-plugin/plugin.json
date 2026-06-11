@@ -22,6 +22,7 @@
     },
     "enableWorkflowValidation": { "type": "boolean", "title": "Enable Workflow Validation", "description": "Experimental plugin-side validation after Claude writes or edits workflow JSON files. Injects validator feedback back into the turn. Disabled by default.", "default": false },
     "workflowValidationMaxCalls": { "type": "number", "title": "Workflow Validation Max Calls", "description": "Max plugin-side validator calls per session when workflow validation is enabled.", "default": 3 },
+    "workflowEditStyle": { "type": "string", "title": "Workflow Edit Style", "description": "How validator feedback asks the model to repair an invalid workflow. 'rewrite' (default): batch all fixes into one full re-write. 'surgical': patch only failing nodes via scripted JSON edits using a !!DRAFT!! marker, then trigger one re-validation — far fewer output tokens on large workflows. Experimental.", "default": "rewrite" },
     "enableBackstopRecall": { "type": "boolean", "title": "Enable Backstop Recall", "description": "Refresh n8n context during agent reasoning (after Edit/Write/Task). Disable to save tokens.", "default": true },
     "backstopRecallCap": { "type": "number", "title": "Backstop Recall Cap", "description": "Max backstop recalls per session.", "default": 4 },
     "backstopRecallMaxTokens": { "type": "number", "title": "Backstop Recall Max Tokens", "description": "Returned-context size cap per backstop recall.", "default": 8000 },

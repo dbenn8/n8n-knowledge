@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Surgical-edit repair mode (experimental, off by default)
+- New `workflowEditStyle` option (`rewrite` | `surgical`). In surgical mode, INVALID validator feedback instructs the model to patch only the failing nodes via a scripted JSON edit and a `!!DRAFT!!` draft marker, instead of regenerating the whole file — cutting output tokens on large-workflow repair rounds by ~99% per fix.
+- The validation hook skips files whose first line is `!!DRAFT!!` (work-in-progress drafts): no validation, no budget charge, in all modes.
+
 ## 0.3.8 (2026-06-11)
 
 ### Validator warnings, smarter context injection, multi-node gotcha recall
