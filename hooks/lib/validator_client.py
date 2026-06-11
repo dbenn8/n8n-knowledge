@@ -20,6 +20,7 @@ from validator_metadata import build_local_validator_info, fetch_cloud_health
 from validator_enrichment import (
     build_issue_block,
     build_structured_issues,
+    build_warnings_block,
     summarize_validation,
 )
 
@@ -73,6 +74,7 @@ def shape_result(
         "feedback_block": "\n".join(f"- {msg}" for msg in repair_messages),
         "errors": validation.get("errors", []),
         "warnings": validation.get("warnings", []),
+        "warnings_block": build_warnings_block(validation),
         "statistics": validation.get("statistics", {}),
         "suggestions": validation.get("suggestions", []),
         "validator_mode": mode,
@@ -160,6 +162,7 @@ def validate_workflow(workflow: dict[str, Any], project_dir: str) -> dict[str, A
         "feedback_block": f"- {resolved['reason']}",
         "errors": [{"type": "validator_not_configured", "message": resolved["reason"], "node": None}],
         "warnings": [],
+        "warnings_block": "",
         "statistics": {},
         "suggestions": [],
         "validator_mode": None,

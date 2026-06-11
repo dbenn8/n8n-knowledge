@@ -45,6 +45,112 @@ while IFS='|' read -r status query exp got; do
   assert_eq "$query" "$exp" "$got"
 done < "$TMPOUT"
 
+# --- Detection-noise regression tests (P0 injection fixes) ---
+# These assert on the FULL hit list, not just the top hit, because the
+# defects are about (a) spurious nodes appearing at all and (b) ordering.
+echo ""
+echo "--- detection noise regression ---"
+
+TMPOUT2=$(mktemp)
+trap "rm -f $TMPOUT $TMPOUT2" EXIT
+
+python3 -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+from node_lookup import identify_nodes
+
+def types(prompt):
+    return [nt for _, nt in identify_nodes(prompt)]
+
+cases = []
+
+# Defect A: bare 'n8n' must not match the n8n meta-node.
+cases.append(('A_bare_n8n_no_metanode',
+    'nodes-base.n8n' not in types('google sheets append row not working with n8n')))
+
+# Defect A: generic build prompt -> slack present, n8n meta-node absent.
+t = types('build an n8n workflow that posts to slack')
+cases.append(('A_build_prompt_has_slack', 'nodes-base.slack' in t))
+cases.append(('A_build_prompt_no_n8n_metanode', 'nodes-base.n8n' not in t))
+
+# Defect B: 'workflow' must not produce a workflowTrigger hit, and must not
+# hijack the top slot. 'wait node workflow stuck' -> wait FIRST, no trigger.
+t = types('wait node workflow stuck')
+cases.append(('B_no_workflowtrigger', 'nodes-base.workflowTrigger' not in t))
+cases.append(('B_wait_is_first', bool(t) and t[0] == 'nodes-base.wait'))
+
+# Defect B (combined with A): build prompt also must drop workflowTrigger.
+t = types('build an n8n workflow that posts to slack')
+cases.append(('B_build_prompt_no_workflowtrigger', 'nodes-base.workflowTrigger' not in t))
+
+# Defect E: explicit multi-word 'workflow trigger' STILL resolves.
+cases.append(('E_explicit_workflow_trigger',
+    'nodes-base.workflowTrigger' in types('add a workflow trigger node')))
+
+# Defect C: event-phrasing trigger word 'added' upgrades to the trigger node.
+cases.append(('C_added_yields_sheets_trigger',
+    'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
+cases.append(('C_created_yields_sheets_trigger',
+    'nodes-base.googleSheetsTrigger' in types('when a new google sheets row is created')))
+
+# Negative controls: the demotion must not nuke legitimate detections.
+cases.append(('neg_schedule_still_works',
+    'nodes-base.scheduleTrigger' in types('trigger the workflow on a schedule every 5 minutes')))
+cases.append(('neg_manual_trigger_still_works',
+    'nodes-base.manualTrigger' in types('execute a workflow manually using the Manual Trigger')))
+cases.append(('neg_slack_still_works',
+    'nodes-base.slack' in types('configure the Slack node to post a message')))
+
+# Defect C guard: ubiquitous adjective 'new' must NOT upgrade an action node
+# to its trigger variant ('create a new issue in Jira' is an action).
+cases.append(('C_new_does_not_overtrigger',
+    'nodes-base.jiraTrigger' not in types('create a new issue in jira after processing')))
+
+# --- Defect F: trigger intent must be LOCAL, not prompt-global ---
+# Live regression prompt. 'added' is local to google sheets ('a google
+# sheets row is added'), so sheets upgrades to its trigger variant. The
+# event phrase is fenced off by the comma, so slack/postgres/http_request --
+# which are ACTION targets later in the prompt ('post to slack', 'log to
+# postgres') -- must stay their action nodes and NOT flip to trigger.
+t = types('build an n8n workflow: when a google sheets row is added, '
+          'check it with an IF node, post to slack, log to postgres, '
+          'and call an http request webhook')
+cases.append(('F_sheets_upgrades_local',
+    'nodes-base.googleSheetsTrigger' in t))
+cases.append(('F_slack_stays_action',
+    'nodes-base.slack' in t and 'nodes-base.slackTrigger' not in t))
+cases.append(('F_postgres_stays_action',
+    'nodes-base.postgres' in t and 'nodes-base.postgresTrigger' not in t))
+cases.append(('F_http_request_present',
+    'nodes-base.httpRequest' in t))
+
+# Comma-fenced clause: 'added' belongs to sheets; the slack message that
+# follows the comma is an action, not a trigger.
+t = types('when a new row is added to google sheets, send a slack message')
+cases.append(('F_clause_sheets_trigger',
+    'nodes-base.googleSheetsTrigger' in t))
+cases.append(('F_clause_slack_action',
+    'nodes-base.slack' in t and 'nodes-base.slackTrigger' not in t))
+
+# Keep-green guard: the event phrase ALONE still upgrades sheets locally.
+cases.append(('F_sheets_alone_trigger',
+    'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
+
+for name, ok in cases:
+    print(f'{name}|{\"PASS\" if ok else \"FAIL\"}')
+" > "$TMPOUT2"
+
+while IFS='|' read -r name result; do
+  [ -z "$name" ] && continue
+  if [ "$result" = "PASS" ]; then
+    echo "  PASS: $name"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $name"
+    FAIL=$((FAIL + 1))
+  fi
+done < "$TMPOUT2"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1

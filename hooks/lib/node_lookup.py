@@ -28,6 +28,27 @@ def _load():
 _TRIGGER_WORDS = {
     "trigger", "listen", "watch", "fire", "event",
     "poll", "subscribe", "detect", "monitor",
+    # Event-phrasing words: "when a <service> row is added/created/...".
+    # These signal that the user wants the service's *trigger* node, not its
+    # action node, so they upgrade an action match to its trigger variant.
+    # NOTE: bare "new" is deliberately excluded -- it is a ubiquitous
+    # adjective ("create a new issue", "add a new field") that collides with
+    # action phrasing and would wrongly upgrade action nodes to triggers.
+    "added", "created", "inserted",
+    "updated", "received", "submitted",
+}
+
+
+# Bare single-word keys that are far too generic to count as a node mention.
+# These English words appear in nearly every plugin prompt ("n8n", "workflow"),
+# so matching them injects the meta-node / workflowTrigger schema as noise and
+# steals scarce schema slots. The meta-node and workflowTrigger remain
+# detectable through their unambiguous multi-word keys (e.g. "n8n trigger",
+# "n8n node" context, "workflow trigger"), which are distinct dictionary keys
+# and are NOT demoted here.
+_DEMOTED_BARE_TOKENS = {
+    "n8n",
+    "workflow",
 }
 
 
@@ -76,29 +97,89 @@ def _fuzzy_lookup(word, lookup, cutoff=0.85):
     return None
 
 
+# Proximity window for trigger-intent scoping (in word tokens).
+#
+# A service detection is upgraded to its *trigger* variant (or kept as a
+# trigger node rather than being demoted to its action variant) only when a
+# trigger word occurs LOCALLY -- i.e. within the same clause as that service's
+# matched span AND within this many word tokens of it. This keeps the
+# trigger-intent signal attached to the service the event phrase actually
+# refers to, instead of flipping EVERY detected service globally.
+#
+# Window sized to 6 so that the longest in-clause fixture phrasing still
+# resolves -- e.g. "trigger the workflow on a schedule" has 5 tokens between
+# "trigger" and "schedule" with no punctuation between them. The clause
+# boundary (any of , . ; : ? !) is the hard cutoff: in
+# "... row is added, send a slack message" the comma after the event phrase
+# stops "added" from reaching "slack", so slack stays an action node.
+_TRIGGER_PROXIMITY_TOKENS = 6
+_CLAUSE_BOUNDARY = set(",.;:?!")
+
+
+def _trigger_word_near(pl, start, end):
+    """Return True if a trigger word sits within the proximity window of the
+    [start, end) character span, without crossing a clause boundary.
+
+    `pl` is the (lowercased) prompt text. The span is the matched service
+    name. We tokenize the surrounding text and scan outward from the match,
+    stopping in each direction at the first clause-boundary punctuation.
+    """
+    # Tokens before the match (left context), nearest-first.
+    left = pl[:start]
+    # Cut the left context at the last clause boundary so we stay in-clause.
+    for i in range(len(left) - 1, -1, -1):
+        if left[i] in _CLAUSE_BOUNDARY:
+            left = left[i + 1:]
+            break
+    left_tokens = re.findall(r"[a-z]+", left)
+    for tok in left_tokens[::-1][:_TRIGGER_PROXIMITY_TOKENS]:
+        if tok in _TRIGGER_WORDS:
+            return True
+
+    # Tokens after the match (right context), nearest-first.
+    right = pl[end:]
+    for i, ch in enumerate(right):
+        if ch in _CLAUSE_BOUNDARY:
+            right = right[:i]
+            break
+    right_tokens = re.findall(r"[a-z]+", right)
+    for tok in right_tokens[:_TRIGGER_PROXIMITY_TOKENS]:
+        if tok in _TRIGGER_WORDS:
+            return True
+
+    return False
+
+
 def identify_nodes(prompt):
     lookup = _load()
     action, trigger = _variant_maps(lookup)
     pl = prompt.lower()
-    has_trigger = bool(_TRIGGER_WORDS & set(re.findall(r"[a-z]+", pl)))
 
     hits = []
     # Pass 1: exact word-boundary matches (fast, precise)
     for name in sorted(lookup, key=len, reverse=True):
         if len(name) < 2:
             continue
-        if name in _COMMON_WORDS:
+        if name in _COMMON_WORDS or name in _DEMOTED_BARE_TOKENS:
+            # Overly-generic bare tokens (e.g. "n8n", "workflow") only count as
+            # a node mention when explicitly qualified as "<token> node".
+            # Unambiguous multi-word keys (e.g. "workflow trigger") are
+            # distinct names and bypass this gate entirely.
             node_ctx = r"\b" + re.escape(name) + r"\s+node\b"
             if not re.search(node_ctx, pl):
                 continue
         pattern = r"\b" + re.escape(name) + r"\b"
-        if re.search(pattern, pl):
+        m = re.search(pattern, pl)
+        if m:
             nt = lookup[name]
             suffix = nt.split(".")[-1].lower()
             base = re.sub(r"trigger$", "", suffix)
-            if not has_trigger and base in action and "trigger" in suffix:
+            # Trigger intent is scoped LOCALLY to this match's span, not
+            # globally across the whole prompt.
+            local_trigger = _trigger_word_near(pl, m.start(), m.end())
+            if not local_trigger and base in action and "trigger" in suffix:
                 nt = action[base]
-            elif has_trigger and "trigger" not in suffix and suffix in trigger:
+            elif local_trigger and "trigger" not in suffix and suffix in trigger:
                 nt = trigger[suffix]
             hits.append((name, nt))
             pl = re.sub(pattern, "", pl, count=1)
@@ -114,9 +195,15 @@ def identify_nodes(prompt):
                 nt = lookup[matched_key]
                 suffix = nt.split(".")[-1].lower()
                 base = re.sub(r"trigger$", "", suffix)
-                if not has_trigger and base in action and "trigger" in suffix:
+                # Locate the fuzzy-matched word in the prompt to scope trigger
+                # intent to its span (fall back to no-trigger if not found).
+                wm = re.search(r"\b" + re.escape(word) + r"\b", pl)
+                local_trigger = (
+                    _trigger_word_near(pl, wm.start(), wm.end()) if wm else False
+                )
+                if not local_trigger and base in action and "trigger" in suffix:
                     nt = action[base]
-                elif has_trigger and "trigger" not in suffix and suffix in trigger:
+                elif local_trigger and "trigger" not in suffix and suffix in trigger:
                     nt = trigger[suffix]
                 hits.append((matched_key, nt))
                 break

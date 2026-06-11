@@ -17,6 +17,7 @@ Env vars:
 import glob
 import json
 import os
+import re
 import sqlite3
 import sys
 
@@ -26,6 +27,11 @@ from plugin_config import find_n8n_mcp_install_root
 # Claude Code's 10K additionalContext limit alongside recall results.
 _MAX_CHARS = 6000
 _MAX_NODES = 5
+# Characters reserved at the tail of _MAX_CHARS so the omission marker always
+# fits inside the budget even when the body is truncated. The marker line is
+# short and bounded, so 200 chars is ample headroom.
+_MARKER_RESERVE = 200
+_MARKER_BUDGET = _MAX_CHARS - _MARKER_RESERVE
 
 
 def _find_db():
@@ -68,6 +74,67 @@ def _extract_resource_locator_fields(props_json):
     return fields
 
 
+def order_error_node_types(workflow, result):
+    """Return error node types ordered by descending error count.
+
+    Counts validator issues per node, maps each erroring node name to its node
+    type, and also catches node types named directly inside error messages.
+    Node types are ordered by descending total error count; ties are broken by
+    first appearance in the workflow's ``nodes`` array, making the order fully
+    deterministic (the prior ``set()`` iteration was not).
+
+    When no error node can be identified the result is an EMPTY list — callers
+    must then SKIP spec injection rather than injecting every workflow node
+    (the old fallback injected ALL nodes, P2#9).
+
+    Node types are returned in their original ``n8n-...`` form; the caller is
+    responsible for converting to the ``nodes-base.X`` db form.
+    """
+    nodes = workflow.get("nodes", []) or []
+
+    # First-appearance index per node type (tie-breaker).
+    first_index = {}
+    name_to_type = {}
+    for idx, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        node_type = node.get("type", "")
+        if node_type and node_type not in first_index:
+            first_index[node_type] = idx
+        name = node.get("name")
+        if name is not None:
+            name_to_type[name] = node_type
+
+    all_node_types = set(first_index.keys())
+
+    # Count errors per node type.
+    counts = {}
+    for issue in result.get("issues", []) or []:
+        name = issue.get("node")
+        if name and name in name_to_type:
+            nt = name_to_type[name]
+            if nt:
+                counts[nt] = counts.get(nt, 0) + 1
+
+    # Also catch node types mentioned directly in error messages. Attribute one
+    # count per matching message so message-only errors still rank a node.
+    for issue in result.get("issues", []) or []:
+        msg = issue.get("message", "") or ""
+        for m in re.finditer(r"n8n-[\w.-]+", msg):
+            nt = m.group(0)
+            if nt in all_node_types:
+                counts[nt] = counts.get(nt, 0) + 1
+
+    if not counts:
+        return []
+
+    # Descending count, ties broken by first appearance (ascending index).
+    return sorted(
+        counts.keys(),
+        key=lambda nt: (-counts[nt], first_index.get(nt, len(nodes))),
+    )
+
+
 def build_cheatsheet(node_types, db_path=None):
     """Return a compact schema cheatsheet string, or None if unavailable."""
     if not node_types:
@@ -83,6 +150,9 @@ def build_cheatsheet(node_types, db_path=None):
         return None
 
     sections = []
+    # Node types dropped purely because of the _MAX_NODES cap (they were never
+    # queried). Char-cap truncation can drop more; tracked separately below.
+    omitted_by_node_cap = max(0, len(node_types) - _MAX_NODES)
 
     for nt in node_types[:_MAX_NODES]:
         row = db.execute(
@@ -149,9 +219,36 @@ def build_cheatsheet(node_types, db_path=None):
     body = "\n\n".join(sections)
     result = header + "\n" + body
 
-    # Hard cap to stay within additionalContext limit
+    omitted = omitted_by_node_cap
+
+    # Hard cap to stay within additionalContext limit. Reserve room so the
+    # omission marker itself always fits inside _MAX_CHARS even after truncation.
+    truncated = False
     if len(result) > _MAX_CHARS:
-        result = result[:_MAX_CHARS] + "\n... (truncated)"
+        truncated = True
+        # Count how many whole sections survive the budget so the marker can
+        # report an accurate omitted total (cap-dropped + truncation-dropped).
+        kept_sections = 0
+        running = len(header) + 1  # header + the leading "\n"
+        for i, sec in enumerate(sections):
+            added = len(sec) + (2 if i > 0 else 0)  # "\n\n" between sections
+            if running + added > _MARKER_BUDGET:
+                break
+            running += added
+            kept_sections += 1
+        if kept_sections < 1:
+            kept_sections = 1  # always show at least one section
+        omitted += len(sections) - kept_sections
+        body = "\n\n".join(sections[:kept_sections])
+        result = header + "\n" + body
+        if len(result) > _MARKER_BUDGET:
+            result = result[:_MARKER_BUDGET] + "\n... (truncated)"
+
+    if omitted > 0:
+        result += (
+            f"\n\n(+{omitted} more node schemas omitted — re-validate after fixing "
+            "the nodes above to see them)"
+        )
 
     return result
 
