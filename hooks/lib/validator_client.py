@@ -27,6 +27,29 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BRIDGE_JS = os.path.join(SCRIPT_DIR, "validator_bridge.js")
 
 
+def _error_result(error_type: str, message: str) -> dict[str, Any]:
+    """Build a raw single-error validator result.
+
+    Used by every transport-level failure path (local bridge failure, cloud
+    HTTP error, cloud request error) so they all return an identical skeleton.
+    """
+    return {
+        "valid": False,
+        "error_count": 1,
+        "warning_count": 0,
+        "errors": [
+            {
+                "type": error_type,
+                "message": message,
+                "node": None,
+            }
+        ],
+        "warnings": [],
+        "statistics": {},
+        "suggestions": [],
+    }
+
+
 def shape_result(
     validation: dict[str, Any],
     workflow: dict[str, Any],
@@ -69,21 +92,10 @@ def validate_local(workflow: dict[str, Any], local_root: str) -> dict[str, Any]:
         env=env,
     )
     if proc.returncode != 0:
-        return {
-            "valid": False,
-            "error_count": 1,
-            "warning_count": 0,
-            "errors": [
-                {
-                    "type": "validator_bridge_error",
-                    "message": proc.stderr[:400] or "local validator bridge failed",
-                    "node": None,
-                }
-            ],
-            "warnings": [],
-            "statistics": {},
-            "suggestions": [],
-        }
+        return _error_result(
+            "validator_bridge_error",
+            proc.stderr[:400] or "local validator bridge failed",
+        )
     result = json.loads(proc.stdout)
     if isinstance(result, dict):
         result.setdefault("validator_info", build_local_validator_info(local_root))
@@ -111,37 +123,12 @@ def validate_cloud(workflow: dict[str, Any], url: str) -> dict[str, Any]:
             return result
     except urllib.error.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
-        return {
-            "valid": False,
-            "error_count": 1,
-            "warning_count": 0,
-            "errors": [
-                {
-                    "type": "validator_http_error",
-                    "message": f"cloud validator returned HTTP {exc.code}: {text[:300]}",
-                    "node": None,
-                }
-            ],
-            "warnings": [],
-            "statistics": {},
-            "suggestions": [],
-        }
+        return _error_result(
+            "validator_http_error",
+            f"cloud validator returned HTTP {exc.code}: {text[:300]}",
+        )
     except Exception as exc:
-        return {
-            "valid": False,
-            "error_count": 1,
-            "warning_count": 0,
-            "errors": [
-                {
-                    "type": "validator_request_error",
-                    "message": str(exc),
-                    "node": None,
-                }
-            ],
-            "warnings": [],
-            "statistics": {},
-            "suggestions": [],
-        }
+        return _error_result("validator_request_error", str(exc))
 
 
 def validate_workflow(workflow: dict[str, Any], project_dir: str) -> dict[str, Any]:
