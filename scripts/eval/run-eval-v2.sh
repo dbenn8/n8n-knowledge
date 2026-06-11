@@ -383,6 +383,8 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
         [ -n "${EVAL_PLUGIN_VALIDATOR_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORMODE=${EVAL_PLUGIN_VALIDATOR_MODE}")
         [ -n "${EVAL_PLUGIN_VALIDATOR_CLOUD_URL:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORCLOUDURL=${EVAL_PLUGIN_VALIDATOR_CLOUD_URL}")
         [ -n "${EVAL_PLUGIN_VALIDATOR_LOCAL_PATH:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORLOCALPATH=${EVAL_PLUGIN_VALIDATOR_LOCAL_PATH}")
+        [ -n "${EVAL_PLUGIN_WORKFLOW_EDIT_STYLE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE=${EVAL_PLUGIN_WORKFLOW_EDIT_STYLE}")
+        [ -n "${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE}")
       fi
       plugin_cmd=(
         claude -p "$prompt" --output-format json --system-prompt "$run_system"
