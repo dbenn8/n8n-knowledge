@@ -731,15 +731,22 @@ try:
             + out_tok * out_rate
         ) / 1_000_000
     # In-session validator call count (plugin only): the PostToolUse hook tracks
-    # calls per session_id in a TMPDIR state file. Read it via the session_id
-    # in the response payload so the summary can report validator-budget usage.
+    # calls per session_id in a per-user runtime state file. Read it via the
+    # session_id in the response payload so the summary can report validator-budget
+    # usage. Path mirrors runtime_dirs.py: <runtime>/state/workflow-validation/<sid>.json
+    # where runtime = N8N_KNOWLEDGE_RUNTIME_DIR, else (XDG_CACHE_HOME or ~/.cache)/n8n-knowledge.
     validator_calls = None
     try:
         sid = d.get('session_id', '')
         if sid:
+            runtime = (
+                os.environ.get('N8N_KNOWLEDGE_RUNTIME_DIR')
+                or os.path.join(
+                    os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'),
+                    'n8n-knowledge')
+            )
             state_path = os.path.join(
-                os.environ.get('TMPDIR', '/tmp'),
-                'n8n-knowledge-workflow-validation', sid + '.json')
+                runtime, 'state', 'workflow-validation', sid + '.json')
             if os.path.exists(state_path):
                 validator_calls = int(json.load(open(state_path)).get('calls', 0))
     except Exception:

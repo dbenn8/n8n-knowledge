@@ -12,7 +12,10 @@ mk_payload(){ python3 -c "import json,sys; print(json.dumps({'session_id':'valid
 
 TMPDIR_TEST=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_TEST"' EXIT
-STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+# Pin the per-user runtime dir under the test's tmp dir so validator session state is
+# hermetic (hook resolves $NK_STATE_DIR/workflow-validation from this override).
+export N8N_KNOWLEDGE_RUNTIME_DIR="$TMPDIR_TEST/runtime"
+STATE_DIR="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation"
 rm -f "$STATE_DIR/validator-test.json" "$STATE_DIR/validator-cap-test.json" "$STATE_DIR/validator-nonwf.json"
 
 WF="$TMPDIR_TEST/workflow.json"

@@ -6,7 +6,7 @@ This plugin collects no telemetry and tracks no users. When triggered, your prom
 
 ## Local Transparency Log
 
-So you can see exactly what the knowledge base returns to your model, the plugin writes a recall summary to a local debug log on **your machine only** (`/tmp/n8n-knowledge-debug.log`). Nothing in this log ever leaves your computer — it exists so you can inspect, in real time, what context is being injected and why. Set the `debugRecall` plugin option to `off` to disable it, or to `full` for complete recall payloads.
+So you can see exactly what the knowledge base returns to your model, the plugin writes a recall summary to a local debug log on **your machine only** (`~/.cache/n8n-knowledge/debug.log`). Nothing in this log ever leaves your computer — it exists so you can inspect, in real time, what context is being injected and why. The log is created with owner-only permissions (0600) in your user cache directory; on machines you share, other accounts cannot read it. Set the `debugRecall` plugin option to `off` to disable it, or to `full` for complete recall payloads.
 
 ## Content Disclaimer
 

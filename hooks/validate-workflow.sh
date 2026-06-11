@@ -5,6 +5,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
+source "$LIB_DIR/runtime_dirs.sh"
+# Per-user runtime paths: session validator state lives under ~/.cache (0700), not /tmp.
+nk_runtime_init
 
 [ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-false}" = "true" ] || exit 0
 
@@ -26,7 +29,7 @@ case "$FILE_PATH" in
 esac
 
 CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
-STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+STATE_DIR="$NK_STATE_DIR/workflow-validation"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 if [ -n "$SID" ]; then

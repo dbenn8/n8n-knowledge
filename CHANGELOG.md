@@ -12,6 +12,7 @@
 - Local validator suppresses false positives on dynamically loaded option lists and expression values.
 - The deep-search skill is now model-invocable and teaches validation-budget discipline.
 - Eval harness: per-run isolated config dirs, optional transcript preservation, targeted prompt selection, validator call-count reporting.
+- State and debug log moved from /tmp to ~/.cache/n8n-knowledge (0700 dir, 0600 log). Set N8N_KNOWLEDGE_RUNTIME_DIR to override. Old /tmp files are no longer read; delete them manually if present.
 
 ## 0.3.7 (2026-06-11)
 

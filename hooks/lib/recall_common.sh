@@ -3,6 +3,11 @@
 # Hindsight recall calls. Sourced by recall.sh and structured_recall.sh so both use
 # ONE endpoint resolution (env-overridable) and ONE escaping/POST implementation.
 
+# Per-user runtime paths (debug log). Sourced relative to THIS file's dir so the FAIL
+# logger works even when the caller never ran nk_runtime_init — nk_debug_log_write
+# self-inits. This file may be sourced standalone (e.g. tests), so resolve our own dir.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime_dirs.sh"
+
 # Single endpoint resolution: default to the public applikuapp recall URL, but allow
 # RECALL_URL to override it consistently for BOTH recall.sh and structured_recall.sh.
 # (Before this, recall.sh hardcoded the URL and was NOT overridable — inconsistent.)
@@ -29,8 +34,7 @@ recall_post() {
     -H "Content-Type: application/json" \
     -d "$body" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "[$(date +%H:%M:%S)] recall_post FAIL rc=$rc url=$RECALL_URL max_time=${RECALL_CURL_MAX_TIME}s" \
-      >> /tmp/n8n-knowledge-debug.log 2>/dev/null || true
+    nk_debug_log_write "[$(date +%H:%M:%S)] recall_post FAIL rc=$rc url=$RECALL_URL max_time=${RECALL_CURL_MAX_TIME}s"
   fi
   # ALWAYS return 0: callers run under `set -e` inside Claude Code hooks. A
   # propagated curl failure killed the ENTIRE hook (this was the silent-failure

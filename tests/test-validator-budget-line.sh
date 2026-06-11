@@ -39,8 +39,11 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 run_hook() {
   # $1 = workflow file path, $2 = session id
+  # Pin the runtime dir under WORK_DIR so the validator session state stays hermetic
+  # (lives at $WORK_DIR/state/workflow-validation/<sid>.json, cleaned with WORK_DIR).
   printf '{"session_id":"%s","tool_name":"Write","cwd":"%s","tool_input":{"file_path":"%s"}}' \
     "$2" "$WORK_DIR" "$1" |
+    N8N_KNOWLEDGE_RUNTIME_DIR="$WORK_DIR" \
     CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true \
     CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=10 \
     CLAUDE_PLUGIN_OPTION_VALIDATORMODE=local \
@@ -90,8 +93,8 @@ assert_contains "INVALID feedback carries the budget line with remaining count" 
 assert_contains "INVALID feedback tells the model to batch fixes" \
   "Batch ALL fixes below into one complete re-write" "$OUT_INVALID"
 
-# Cleanup the session state file this test created
-rm -f "${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation/$SID.json"
+# Cleanup the session state file this test created (lives under the pinned runtime dir).
+rm -f "$WORK_DIR/state/workflow-validation/$SID.json"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
