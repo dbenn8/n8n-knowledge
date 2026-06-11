@@ -1,7 +1,10 @@
 .DS_Store
 *.log
 /tmp/
-.claude/*.local.md
+.tmp/
+.claude/
 scripts/eval/.deepseek.env.local
 __pycache__/
+.pytest_cache/
 out/
+*.db
