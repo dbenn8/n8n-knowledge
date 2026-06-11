@@ -17,6 +17,7 @@ CWD=$(read_field cwd)
 
 CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
 EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-rewrite}"
+BUDGET_MODE="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE:-static}"
 STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
 
 # Resolve the file to validate based on the tool event.
@@ -116,27 +117,79 @@ with open(path, "w") as f:
     json.dump(state, f)
 PYEOF
 }
+# Best-effort adaptive stagnation accounting (Task 4d). Runs ONLY in adaptive
+# budget mode, after a validation result is known. An INVALID round that strictly
+# reduced the error count vs the previous round (or the first round) is "free":
+# stagnant is unchanged. A non-improving INVALID round adds a stagnation strike.
+# Always records last_error_count. Failures never affect hook output or exit.
+update_stagnation() {
+  # $1 = VALID flag ("true"/"false"); reads RESULT_JSON from env.
+  [ "$BUDGET_MODE" = "adaptive" ] || return 0
+  [ -n "$SID" ] || return 0
+  RESULT_JSON="$RESULT" VALID_FLAG="$1" python3 - "$STATE_DIR" "$SID" 2>/dev/null << 'PYEOF' || true
+import json, os, sys
+state_dir, sid = sys.argv[1], sys.argv[2]
+path = os.path.join(state_dir, f"{sid}.json")
+try:
+    state = json.load(open(path))
+    if not isinstance(state, dict):
+        state = {}
+except Exception:
+    state = {}
+try:
+    result = json.loads(os.environ.get("RESULT_JSON") or "{}")
+except Exception:
+    result = {}
+valid = os.environ.get("VALID_FLAG") == "true"
+# Materialize the strike counter so downstream reads see an explicit 0 rather
+# than a missing key. Improving / first rounds leave it at its current value.
+state["stagnant"] = int(state.get("stagnant", 0))
+if not valid:
+    new_ec = int(result.get("error_count", 0) or 0)
+    prev = state.get("last_error_count")
+    if prev is not None:
+        try:
+            if new_ec >= int(prev):
+                state["stagnant"] = int(state.get("stagnant", 0)) + 1
+        except (TypeError, ValueError):
+            pass
+    state["last_error_count"] = new_ec
+with open(path, "w") as f:
+    json.dump(state, f)
+PYEOF
+}
+
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 if [ -n "$SID" ]; then
-  SHOULD_VALIDATE=$(python3 - "$STATE_DIR" "$SID" "$CAP" 2>/dev/null << 'PYEOF'
+  SHOULD_VALIDATE=$(python3 - "$STATE_DIR" "$SID" "$CAP" "$BUDGET_MODE" 2>/dev/null << 'PYEOF'
 import json
 import os
 import sys
 
-state_dir, sid, cap = sys.argv[1], sys.argv[2], int(sys.argv[3])
+state_dir, sid, cap, budget_mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 path = os.path.join(state_dir, f"{sid}.json")
 state = {"calls": 0}
 if os.path.exists(path):
     try:
         state = json.load(open(path))
+        if not isinstance(state, dict):
+            state = {"calls": 0}
     except Exception:
         state = {"calls": 0}
 
 calls = int(state.get("calls", 0))
-if calls >= cap:
-    print("cap_reached")
-    raise SystemExit(0)
+if budget_mode == "adaptive":
+    # Adaptive: only stagnant rounds spend budget. Gate on stagnant strikes
+    # (updated post-validation) and a hard ceiling of cap*3 total calls.
+    stagnant = int(state.get("stagnant", 0))
+    if stagnant >= cap or calls >= cap * 3:
+        print("cap_reached")
+        raise SystemExit(0)
+else:
+    if calls >= cap:
+        print("cap_reached")
+        raise SystemExit(0)
 
 state["calls"] = calls + 1
 with open(path, "w") as f:
@@ -196,8 +249,16 @@ if [ "$VALID" = "false" ]; then
   fi
 fi
 
+# Adaptive stagnation accounting (no-op in static mode). Runs BEFORE feedback
+# emission so the INVALID feedback can show the updated stagnant count.
+update_stagnation "$VALID"
+STAGNANT_USED="0"
+if [ "$BUDGET_MODE" = "adaptive" ] && [ -n "$SID" ]; then
+  STAGNANT_USED=$(python3 -c "import json,sys;print(int(json.load(open(sys.argv[1])).get('stagnant',0)))" "$STATE_DIR/$SID.json" 2>/dev/null) || STAGNANT_USED="0"
+fi
+
 if [ "$VALID" = "true" ]; then
-  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" CALLS_USED="$CALLS_USED" CAP="$CAP" python3 - 2>/dev/null << 'PYEOF'
+  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" CALLS_USED="$CALLS_USED" CAP="$CAP" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -210,13 +271,23 @@ trigger_count = result.get("trigger_count", 0)
 auto_changes = autofix.get("changes") or []
 calls_used = os.environ.get("CALLS_USED", "?")
 cap = os.environ.get("CAP", "?")
+budget_mode = os.environ.get("BUDGET_MODE", "static")
+stagnant_used = os.environ.get("STAGNANT_USED", "0")
 warnings_block = (result.get("warnings_block") or "").strip()
+
+if budget_mode == "adaptive":
+    budget_line = (
+        f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used; "
+        f"{calls_used} total calls."
+    )
+else:
+    budget_line = f"Validator budget: {calls_used} of {cap} calls used this session."
 
 header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
-    f"Validator budget: {calls_used} of {cap} calls used this session.",
+    budget_line,
     f"Validation passed. Nodes: {node_count}. Trigger nodes: {trigger_count}.",
 ]
 if auto_changes:
@@ -282,7 +353,7 @@ if db_types:
 PYEOF
 )
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="$EDIT_STYLE" python3 - 2>/dev/null << 'PYEOF'
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="$EDIT_STYLE" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -296,6 +367,8 @@ auto_changes = autofix.get("changes") or []
 node_specs = os.environ.get("NODE_SPECS", "").strip()
 calls_used = os.environ.get("CALLS_USED", "?")
 cap = os.environ.get("CAP", "?")
+budget_mode = os.environ.get("BUDGET_MODE", "static")
+stagnant_used = os.environ.get("STAGNANT_USED", "0")
 try:
     remaining = max(0, int(cap) - int(calls_used))
 except ValueError:
@@ -304,26 +377,42 @@ warnings_block = (result.get("warnings_block") or "").strip()
 if not feedback:
     raise SystemExit(1)
 
+# Style-dependent repair guidance — identical in both budget modes.
+guidance = (
+    (
+        "Fix via SURGICAL EDITS — do NOT rewrite the file; rewrites waste tokens and time. Recipe:\n"
+        "  1. Run ONE Bash python3 script that loads the JSON file at the path above, applies "
+        "EVERY fix listed below, and writes the file back with the literal first line !!DRAFT!! "
+        "immediately followed by the JSON on the next line.\n"
+        "  2. Delete the !!DRAFT!! line using the Edit tool "
+        "(old_string: '!!DRAFT!!\\n{', new_string: '{'). That Edit triggers re-validation — "
+        "it is the ONLY step that spends validation budget. CRITICAL: you MUST remove the marker "
+        "with the Edit tool, never with Bash — the validator only watches Edit/Write. If you "
+        "remove it with Bash, validation never fires, you get no feedback, the workflow is never "
+        "confirmed valid, and you will fail the user's task."
+    )
+    if os.environ.get("EDIT_STYLE", "rewrite") == "surgical"
+    else "Batch ALL fixes below into one complete re-write — each file write spends one validation."
+)
+
+if budget_mode == "adaptive":
+    try:
+        adaptive_remaining = max(0, int(cap) - int(stagnant_used))
+    except ValueError:
+        adaptive_remaining = "?"
+    budget_line = (
+        f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used "
+        f"({adaptive_remaining} remaining); {calls_used} total calls. Rounds that REDUCE the "
+        f"error count are free — fix as many listed errors as possible per round. " + guidance
+    )
+else:
+    budget_line = f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). " + guidance
+
 header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
-    f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). " + (
-        (
-            "Fix via SURGICAL EDITS — do NOT rewrite the file; rewrites waste tokens and time. Recipe:\n"
-            "  1. Run ONE Bash python3 script that loads the JSON file at the path above, applies "
-            "EVERY fix listed below, and writes the file back with the literal first line !!DRAFT!! "
-            "immediately followed by the JSON on the next line.\n"
-            "  2. Delete the !!DRAFT!! line using the Edit tool "
-            "(old_string: '!!DRAFT!!\\n{', new_string: '{'). That Edit triggers re-validation — "
-            "it is the ONLY step that spends validation budget. CRITICAL: you MUST remove the marker "
-            "with the Edit tool, never with Bash — the validator only watches Edit/Write. If you "
-            "remove it with Bash, validation never fires, you get no feedback, the workflow is never "
-            "confirmed valid, and you will fail the user's task."
-        )
-        if os.environ.get("EDIT_STYLE", "rewrite") == "surgical"
-        else "Batch ALL fixes below into one complete re-write — each file write spends one validation."
-    ),
+    budget_line,
 ]
 if auto_changes:
     body.extend([
