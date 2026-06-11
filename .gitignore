@@ -2,5 +2,6 @@
 *.log
 /tmp/
 .claude/*.local.md
+scripts/eval/.deepseek.env.local
 __pycache__/
 out/

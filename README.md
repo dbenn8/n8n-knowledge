@@ -166,6 +166,48 @@ max_text_length_low: 300
 
 Add `.claude/*.local.md` to your `.gitignore`.
 
+### Validator routing (optional)
+
+For the future plugin-side validator integration, you can preconfigure how the plugin should choose between a local validator and the cloud validator endpoint in `.claude/n8n-knowledge.local.md`:
+
+```markdown
+---
+validator_mode: default
+validator_cloud_url: https://your-host/public/validate-workflow
+validator_local_path: ""
+---
+```
+
+Behavior:
+
+- `validator_mode: local` — require a local validator install
+- `validator_mode: cloud` — require `validator_cloud_url`
+- `validator_mode: default` — prefer a local `n8n-mcp` install if found, otherwise fall back to `validator_cloud_url`
+
+`validator_local_path` is optional. If left blank, the plugin auto-detects the default local `n8n-mcp` install root under `~/.npm/_npx/.../node_modules/n8n-mcp`.
+
+These settings are for plugin-side validation routing only. They are not meant for the eval harness conditions (`plugin`, `mcp`, `bare`) or for local post-hoc validator scripts/tests, which should continue to use their own explicit local validator paths.
+
+You can inspect the resolved choice with:
+
+```bash
+python3 hooks/lib/resolve_validator_target.py "$PWD"
+```
+
+### Workflow validation hook (optional)
+
+The plugin can also inject validator feedback after Claude writes or edits an n8n workflow JSON file, but this is disabled by default.
+
+Enable `Workflow Validation` in the plugin settings to turn it on. When enabled:
+
+- it runs only on plugin-side `Edit`/`Write` tool events
+- it validates written workflow JSON files only
+- it uses the validator routing settings above (`local`, `cloud`, or `default`)
+- it caps validator calls per session using `Workflow Validation Max Calls` (default `3`)
+- it injects validator feedback back into the turn as `PostToolUse` additional context
+
+This hook is plugin-side only. It does not affect the eval harness conditions or the local post-hoc validation scripts.
+
 ## Refreshing node specs
 
 When a new n8n version ships with updated nodes:
