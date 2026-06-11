@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # recall.sh — Call Hindsight recall API and format results for hook output
 
-RECALL_URL="https://n8nhindsight.applikuapp.com/public/recall"
+# Shared endpoint resolution (RECALL_URL-overridable) + curl/escape helpers.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recall_common.sh"
 
 do_recall() {
   local query="$1"
   local budget="${2:-low}"
   local max_tokens="${3:-3000}"
-  curl -s -X POST "$RECALL_URL" \
-    -H "Content-Type: application/json" \
-    -d "$(printf '{"query": %s, "budget": "%s", "max_tokens": %s, "include": {"source_facts": {}}}' \
-      "$(printf '%s' "$query" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" \
-      "$budget" "$max_tokens")"
+  recall_post "$(printf '{"query": %s, "budget": "%s", "max_tokens": %s, "include": {"source_facts": {}}}' \
+    "$(printf '%s' "$query" | recall_json_escape)" \
+    "$budget" "$max_tokens")"
 }
 
 format_recall_results() {

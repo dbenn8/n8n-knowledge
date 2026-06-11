@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # structured_recall.sh — Tag-filtered recall for node specs from Hindsight
 
-RECALL_URL="${RECALL_URL:-https://n8nhindsight.applikuapp.com/public/recall}"
+# Shared endpoint resolution (RECALL_URL-overridable) + curl/escape helpers.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recall_common.sh"
 
 do_structured_recall() {
   local node_type="$1"
@@ -15,12 +16,10 @@ do_structured_recall() {
   fi
 
   local query_escaped
-  query_escaped=$(printf '%s node specification' "$display_name" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')
+  query_escaped=$(printf '%s node specification' "$display_name" | recall_json_escape)
 
-  curl -s -X POST "$RECALL_URL" \
-    -H "Content-Type: application/json" \
-    -d "$(printf '{"query": %s, "budget": "low", "max_tokens": 3000, "tags": %s, "tags_match": "all"}' \
-      "$query_escaped" "$tags_json")"
+  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 3000, "tags": %s, "tags_match": "all"}' \
+    "$query_escaped" "$tags_json")"
 }
 
 do_gotcha_recall() {
@@ -29,10 +28,8 @@ do_gotcha_recall() {
   service=$(echo "$node_type" | sed 's/.*\.//' | sed 's/Trigger$//' | sed 's/Tool$//')
 
   local query_escaped
-  query_escaped=$(printf '%s node bug issue workaround error' "$service" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')
+  query_escaped=$(printf '%s node bug issue workaround error' "$service" | recall_json_escape)
 
-  curl -s -X POST "$RECALL_URL" \
-    -H "Content-Type: application/json" \
-    -d "$(printf '{"query": %s, "budget": "low", "max_tokens": 2000, "tags": ["source:github", "node:%s"], "tags_match": "any"}' \
-      "$query_escaped" "$node_type")"
+  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 2000, "tags": ["source:github", "node:%s"], "tags_match": "any"}' \
+    "$query_escaped" "$node_type")"
 }

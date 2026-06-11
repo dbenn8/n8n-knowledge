@@ -51,11 +51,7 @@ with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
   # must still reach the model if validation is enabled — they are not recall-dependent.
   SKIP_GUIDANCE=$(build_validator_guidance)
   if [ -n "$SKIP_GUIDANCE" ]; then
-    SKIP_GUIDANCE_CONTENT="$SKIP_GUIDANCE" python3 -c "
-import json, os
-g = os.environ['SKIP_GUIDANCE_CONTENT']
-print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':g}}))
-" 2>/dev/null || true
+    python3 "$SCRIPT_DIR/lib/hook_json.py" emit UserPromptSubmit "$SKIP_GUIDANCE" 2>/dev/null || true
   fi
   exit 0
 fi
@@ -125,75 +121,26 @@ fi
 # Format and output results (pass CWD for .local.md config lookup)
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
-# Cap recall-only context at 10K so large recall results never spill to a file.
+# Cap recall-only context at MAX_CTX (10K) so large recall results never spill to a file.
 if [ -z "$DB_INJECT" ] && [ -n "$RESULT" ]; then
-  RESULT=$(python3 -c "
-import json, sys
-MAX_CTX = 10000
-raw = sys.stdin.read().strip()
-if not raw: sys.exit(0)
-try:
-    data = json.loads(raw)
-    ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
-    if len(ctx) > MAX_CTX:
-        ctx = ctx[:MAX_CTX] + '\n... (recall truncated to stay inline)'
-        data.setdefault('hookSpecificOutput', {})['additionalContext'] = ctx
-    print(json.dumps(data))
-except Exception:
-    print(raw)
-" <<< "$RESULT" 2>/dev/null || echo "$RESULT")
+  RESULT=$(python3 "$SCRIPT_DIR/lib/hook_json.py" cap <<< "$RESULT" 2>/dev/null || echo "$RESULT")
 fi
 
 # DB injection goes FIRST — it contains must-have schema (valid operation enums).
 # Recall results come after and can be truncated if needed.
 # This ensures the critical build data is always inline, never spills to a skipped file.
 if [ -n "$DB_INJECT" ]; then
-  RESULT=$(DB_INJECT_CONTENT="$DB_INJECT" python3 -c "
-import json, sys, os
-# Keep total additionalContext under 10K so it stays inline. DB inject is always preserved — recall is trimmed.
-MAX_CTX = 10000
-extra = os.environ['DB_INJECT_CONTENT']
-raw = sys.stdin.read().strip()
-if raw:
-    try:
-        data = json.loads(raw)
-        existing = data.get('hookSpecificOutput', {}).get('additionalContext', '')
-        combined = (extra + '\n\n' + existing).strip()
-        if len(combined) > MAX_CTX:
-            combined = combined[:MAX_CTX] + '\n... (recall truncated to stay inline)'
-        data.setdefault('hookSpecificOutput', {})['additionalContext'] = combined
-        data['hookSpecificOutput']['hookEventName'] = 'UserPromptSubmit'
-        print(json.dumps(data))
-    except Exception:
-        print(raw)
-else:
-    out = {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': extra}}
-    print(json.dumps(out))
-" <<< "$RESULT" 2>/dev/null || echo "$RESULT")
+  # Keep total additionalContext under MAX_CTX (10K) so it stays inline. DB inject is
+  # prepended and always preserved — recall is trimmed by the shared cap helper.
+  RESULT=$(HOOK_JSON_EXTRA="$DB_INJECT" python3 "$SCRIPT_DIR/lib/hook_json.py" prepend-cap UserPromptSubmit <<< "$RESULT" 2>/dev/null || echo "$RESULT")
 fi
 
 # Prepend validator behavioral guidance when workflow validation is enabled.
 # This ensures the model understands the validation protocol in any deployment context.
 VALIDATOR_GUIDANCE=$(build_validator_guidance)
 if [ -n "$VALIDATOR_GUIDANCE" ]; then
-  RESULT=$(VALIDATOR_GUIDANCE_CONTENT="$VALIDATOR_GUIDANCE" python3 -c "
-import json, sys, os
-guidance = os.environ['VALIDATOR_GUIDANCE_CONTENT']
-raw = sys.stdin.read().strip()
-if raw:
-    try:
-        data = json.loads(raw)
-        existing = data.get('hookSpecificOutput', {}).get('additionalContext', '')
-        combined = (guidance + ('\n\n' + existing if existing else '')).strip()
-        data.setdefault('hookSpecificOutput', {})['additionalContext'] = combined
-        data['hookSpecificOutput']['hookEventName'] = 'UserPromptSubmit'
-        print(json.dumps(data))
-    except Exception:
-        print(raw)
-else:
-    out = {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': guidance}}
-    print(json.dumps(out))
-" <<< "$RESULT" 2>/dev/null || echo "$RESULT")
+  # Prepend guidance (no cap — guidance is short and must always survive intact).
+  RESULT=$(HOOK_JSON_EXTRA="$VALIDATOR_GUIDANCE" python3 "$SCRIPT_DIR/lib/hook_json.py" prepend UserPromptSubmit <<< "$RESULT" 2>/dev/null || echo "$RESULT")
 fi
 
 # Debug mode: off, summary (default — condensed), full (complete with formatting)

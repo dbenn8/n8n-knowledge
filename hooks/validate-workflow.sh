@@ -56,7 +56,7 @@ print("fire")
 PYEOF
 ) || exit 0
   if [ "$SHOULD_VALIDATE" = "cap_reached" ]; then
-    CAP_CTX=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "Validator limit reached for this session. No further validator feedback will be injected. The last file you wrote is the output. If the workflow is incomplete, explain what is still missing." 2>/dev/null) || exit 0
+    CAP_CTX=$(python3 "$LIB_DIR/hook_json.py" emit PostToolUse "Validator limit reached for this session. No further validator feedback will be injected. The last file you wrote is the output. If the workflow is incomplete, explain what is still missing." 2>/dev/null) || exit 0
     echo "$CAP_CTX"
     exit 0
   fi
@@ -137,7 +137,7 @@ print("\n".join(body).join([header + "\n", ""]))
 PYEOF
   ) || exit 0
   [ -n "$OK_CTX" ] || exit 0
-  OK_OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$OK_CTX" 2>/dev/null) || exit 0
+  OK_OUTPUT=$(python3 "$LIB_DIR/hook_json.py" emit PostToolUse "$OK_CTX" 2>/dev/null) || exit 0
   echo "$OK_OUTPUT"
   exit 0
 fi
@@ -252,5 +252,5 @@ PYEOF
 ) || exit 0
 
 [ -n "$CTX" ] || exit 0
-OUTPUT=$(python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':sys.argv[1]}}))" "$CTX" 2>/dev/null) || exit 0
+OUTPUT=$(python3 "$LIB_DIR/hook_json.py" emit PostToolUse "$CTX" 2>/dev/null) || exit 0
 echo "$OUTPUT"
