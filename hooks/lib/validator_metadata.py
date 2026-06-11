@@ -136,11 +136,6 @@ def compare_validator_descriptors(
     right: dict[str, Any],
 ) -> list[str]:
     diffs: list[str] = []
-    if left.get("effective_mode") != right.get("effective_mode"):
-        diffs.append(
-            f"effective_mode differs: {left.get('effective_mode')!r} != {right.get('effective_mode')!r}"
-        )
-
     left_info = left.get("validator_info") or {}
     right_info = right.get("validator_info") or {}
     for key in [
@@ -159,6 +154,22 @@ def compare_validator_descriptors(
         db_key = "nodes_db_sha256"
     if left_info.get(db_key) != right_info.get(db_key):
         diffs.append(f"{db_key} differs: {left_info.get(db_key)!r} != {right_info.get(db_key)!r}")
+
+    # Mixed modes (e.g. cloud plugin + local scoring) are allowed when the two
+    # engines are verifiably equivalent: versions and node data all match and
+    # are actually present. Flag the mode difference only when equivalence is
+    # unproven — any diff above, or missing metadata on either side.
+    if left.get("effective_mode") != right.get("effective_mode"):
+        verified_equivalent = (
+            not diffs
+            and bool(left_info.get("installed_n8n_mcp_version"))
+            and bool(left_info.get(db_key))
+        )
+        if not verified_equivalent:
+            diffs.insert(
+                0,
+                f"effective_mode differs: {left.get('effective_mode')!r} != {right.get('effective_mode')!r}",
+            )
     return diffs
 
 
