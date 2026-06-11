@@ -167,12 +167,6 @@ for issue in result.get("issues", []):
     if name:
         error_node_names.add(name)
 
-# Also extract node names from repair messages (e.g., 'for node n8n-nodes-base.X')
-for msg in result.get("repair_messages", []):
-    for m in re.finditer(r'node (n8n-[\w.-]+)', msg):
-        # This is a node type, not a name — track it directly
-        pass
-
 # Map error node names to their node types
 error_node_types = set()
 all_node_types = set()

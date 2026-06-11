@@ -29,13 +29,13 @@ PYEOF
 out0=$(bash "$HOOK" <<< "$(mk_payload Write "$WF")")
 assert_eq "disabled by default" "" "$out0"
 
-# Enabled + valid mock -> injects a finalize-now success notice.
+# Enabled + valid mock -> injects a success notice with a completeness gate.
 VALID_MOCK='{"valid": true, "error_count": 0, "warning_count": 0, "errors": [], "warnings": [], "statistics": {"totalNodes": 1, "triggerNodes": 1}, "suggestions": []}'
 out1=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$VALID_MOCK" bash "$HOOK" <<< "$(mk_payload Write "$WF")")
 assert_contains "valid workflow returns hook json" "hookSpecificOutput" "$out1"
 assert_contains "valid workflow includes success header" "n8n Workflow Validator" "$out1"
 assert_contains "valid workflow includes pass notice" "Validation passed" "$out1"
-assert_contains "valid workflow tells Claude to finalize" "Return your final answer now" "$out1"
+assert_contains "valid workflow includes completeness gate" "fully solve the user's original request" "$out1"
 
 # Enabled + invalid mock -> injects PostToolUse additionalContext.
 INVALID_MOCK='{"valid": false, "error_count": 1, "warning_count": 0, "errors": [{"type":"error","message":"Required property '\''To'\'' cannot be empty","node":"Slack"}], "warnings": [], "statistics": {"totalNodes": 2, "triggerNodes": 1}, "suggestions": []}'

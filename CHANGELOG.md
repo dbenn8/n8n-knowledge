@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.7 (2026-06-11)
+
+### Plugin-side validator enrichment & deterministic scoring
+- Validator preflight guard with scoring parity: fails closed on cloud/local validator mismatch (both engines must be verifiably equivalent).
+- Plugin-side validator enrichment: validator node-spec injection decorates results with resource-locator and IF-filter hints for structured patch targeting.
+- Deterministic gotcha scorer: scoring now produces consistent results across plugin-vs-MCP delta annotations, enabling reliable fail-closed validation in mixed-mode environments.
+- Logical nodes-table content hash for interpreter-independent serialization: workflow validator state now uses content-addressable hashing instead of binary layout, so plugin and MCP validators agree on structural equivalence.
+- Allow mixed validator modes when engines are verifiably equivalent: plugin and MCP validators can coexist and cross-verify if both produce identical node specs and execution signatures.
+
+### Validator result refinement
+- Validator results now include delta annotations showing plugin-vs-MCP differences for forensic verification.
+- Results summarizer highlights equivalence or divergence with confidence scoring for each delta.
+
+## 0.3.6 (2026-06-10)
+
+### Validator node-spec injection & resource-locator hints
+- Validator now injects node-spec data on INVALID results: when workflow validation catches an error, the validator populates the relevant node's resource-locator fields and IF-filter hints to enable structured patch targeting.
+- Resource-locator and IF-filter hints in validator spec injection: error results include enough metadata to guide Claude on which node property to fix and what values are allowed.
+- Plugin-side validator framework: establishes the pattern for validator enrichment and preflight validation before MCP/cloud execution.
+
 ## 0.3.5
 
 ### Backstop recall (mid-turn context injection)
