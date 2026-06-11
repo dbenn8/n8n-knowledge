@@ -28,6 +28,27 @@ def _load():
 _TRIGGER_WORDS = {
     "trigger", "listen", "watch", "fire", "event",
     "poll", "subscribe", "detect", "monitor",
+    # Event-phrasing words: "when a <service> row is added/created/...".
+    # These signal that the user wants the service's *trigger* node, not its
+    # action node, so they upgrade an action match to its trigger variant.
+    # NOTE: bare "new" is deliberately excluded -- it is a ubiquitous
+    # adjective ("create a new issue", "add a new field") that collides with
+    # action phrasing and would wrongly upgrade action nodes to triggers.
+    "added", "created", "inserted",
+    "updated", "received", "submitted",
+}
+
+
+# Bare single-word keys that are far too generic to count as a node mention.
+# These English words appear in nearly every plugin prompt ("n8n", "workflow"),
+# so matching them injects the meta-node / workflowTrigger schema as noise and
+# steals scarce schema slots. The meta-node and workflowTrigger remain
+# detectable through their unambiguous multi-word keys (e.g. "n8n trigger",
+# "n8n node" context, "workflow trigger"), which are distinct dictionary keys
+# and are NOT demoted here.
+_DEMOTED_BARE_TOKENS = {
+    "n8n",
+    "workflow",
 }
 
 
@@ -87,7 +108,11 @@ def identify_nodes(prompt):
     for name in sorted(lookup, key=len, reverse=True):
         if len(name) < 2:
             continue
-        if name in _COMMON_WORDS:
+        if name in _COMMON_WORDS or name in _DEMOTED_BARE_TOKENS:
+            # Overly-generic bare tokens (e.g. "n8n", "workflow") only count as
+            # a node mention when explicitly qualified as "<token> node".
+            # Unambiguous multi-word keys (e.g. "workflow trigger") are
+            # distinct names and bypass this gate entirely.
             node_ctx = r"\b" + re.escape(name) + r"\s+node\b"
             if not re.search(node_ctx, pl):
                 continue
