@@ -34,6 +34,24 @@ def _sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _hash_sql_value(digest: "hashlib._Hash", value: Any) -> None:
+    # Explicit type-tagged serialization: repr() is unicodedata-version
+    # dependent (e.g. Python 3.10 escapes U+1FAAA, 3.11+ prints it literally),
+    # so it hashes differently across interpreter versions on identical data.
+    if value is None:
+        digest.update(b"\x00N")
+    elif isinstance(value, bool):
+        digest.update(b"\x00O1" if value else b"\x00O0")
+    elif isinstance(value, int):
+        digest.update(b"\x00I" + str(value).encode("ascii"))
+    elif isinstance(value, float):
+        digest.update(b"\x00F" + repr(value).encode("ascii"))
+    elif isinstance(value, bytes):
+        digest.update(b"\x00B" + value)
+    else:
+        digest.update(b"\x00S" + str(value).encode("utf-8"))
+
+
 def _nodes_content_sha256(path: Path) -> str | None:
     """Stable content hash of the nodes table.
 
@@ -51,7 +69,9 @@ def _nodes_content_sha256(path: Path) -> str | None:
     try:
         digest = hashlib.sha256()
         for row in db.execute("SELECT * FROM nodes ORDER BY node_type"):
-            digest.update(repr(row).encode("utf-8"))
+            for value in row:
+                _hash_sql_value(digest, value)
+            digest.update(b"\x00R")
         return digest.hexdigest()
     except sqlite3.Error:
         return None
