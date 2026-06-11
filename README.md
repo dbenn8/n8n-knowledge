@@ -324,9 +324,11 @@ tests. The dictionary is checked into the repo so users don't need to run this t
 bash tests/run-all.sh
 ```
 
-**184 assertions across 10 test files**, all passing: auto-recall, detection, recall
-formatting, node lookup, structured recall, lookup integrity, GitHub state, observation
-scoring, backstop recall, and workflow validation.
+**221 assertions across 15 test files** (including a 75-test pytest suite for the
+Python helper libraries), all passing: auto-recall, detection, recall formatting, node
+lookup, structured recall, lookup integrity, GitHub state, observation scoring, backstop
+recall, workflow validation, bridge resolution, cross-repo hash parity, hook JSON
+helpers, and recall endpoint resolution.
 
 ## Roadmap
 
