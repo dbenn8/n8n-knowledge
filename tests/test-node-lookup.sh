@@ -106,6 +106,36 @@ cases.append(('neg_slack_still_works',
 cases.append(('C_new_does_not_overtrigger',
     'nodes-base.jiraTrigger' not in types('create a new issue in jira after processing')))
 
+# --- Defect F: trigger intent must be LOCAL, not prompt-global ---
+# Live regression prompt. 'added' is local to google sheets ('a google
+# sheets row is added'), so sheets upgrades to its trigger variant. The
+# event phrase is fenced off by the comma, so slack/postgres/http_request --
+# which are ACTION targets later in the prompt ('post to slack', 'log to
+# postgres') -- must stay their action nodes and NOT flip to trigger.
+t = types('build an n8n workflow: when a google sheets row is added, '
+          'check it with an IF node, post to slack, log to postgres, '
+          'and call an http request webhook')
+cases.append(('F_sheets_upgrades_local',
+    'nodes-base.googleSheetsTrigger' in t))
+cases.append(('F_slack_stays_action',
+    'nodes-base.slack' in t and 'nodes-base.slackTrigger' not in t))
+cases.append(('F_postgres_stays_action',
+    'nodes-base.postgres' in t and 'nodes-base.postgresTrigger' not in t))
+cases.append(('F_http_request_present',
+    'nodes-base.httpRequest' in t))
+
+# Comma-fenced clause: 'added' belongs to sheets; the slack message that
+# follows the comma is an action, not a trigger.
+t = types('when a new row is added to google sheets, send a slack message')
+cases.append(('F_clause_sheets_trigger',
+    'nodes-base.googleSheetsTrigger' in t))
+cases.append(('F_clause_slack_action',
+    'nodes-base.slack' in t and 'nodes-base.slackTrigger' not in t))
+
+# Keep-green guard: the event phrase ALONE still upgrades sheets locally.
+cases.append(('F_sheets_alone_trigger',
+    'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
+
 for name, ok in cases:
     print(f'{name}|{\"PASS\" if ok else \"FAIL\"}')
 " > "$TMPOUT2"
