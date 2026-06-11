@@ -2,7 +2,11 @@
 
 ## Data Collection
 
-This plugin collects no telemetry, tracks no users, and stores no data locally. When triggered, your prompt text is sent to a read-only API endpoint to retrieve relevant n8n official and community-sourced content. Queries are not logged or retained.
+This plugin collects no telemetry and tracks no users. When triggered, your prompt text is sent to a read-only API endpoint to retrieve relevant n8n official and community-sourced content. Queries are not logged or retained server-side.
+
+## Local Transparency Log
+
+So you can see exactly what the knowledge base returns to your model, the plugin writes a recall summary to a local debug log on **your machine only** (`/tmp/n8n-knowledge-debug.log`). Nothing in this log ever leaves your computer — it exists so you can inspect, in real time, what context is being injected and why. Set the `debugRecall` plugin option to `off` to disable it, or to `full` for complete recall payloads.
 
 ## Content Disclaimer
 

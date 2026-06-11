@@ -180,7 +180,7 @@ out/eval/
 
 ### Config / connection
 
-- **Bank:** `n8n` on the dedicated instance. **URL `N8N_HINDSIGHT_URL`** and **Bearer key `N8N_HINDSIGHT_API_KEY`** read from `portfolio/.env` (loaded by a tiny dotenv parse — no dependency). A `--bank` flag allows pointing at a throwaway bank for harness self-tests.
+- **Bank:** `n8n` on the dedicated instance. **URL `N8N_HINDSIGHT_URL`** and **Bearer key `N8N_HINDSIGHT_API_KEY`** read from the environment (loaded by a tiny dotenv parse — no dependency). A `--bank` flag allows pointing at a throwaway bank for harness self-tests.
 - **Recall endpoint:** authenticated `POST {N8N_HINDSIGHT_URL}/v1/default/banks/{bank}/recall` with `Authorization: Bearer …`. (The plugin's unauthenticated `/public/recall` is the same engine but without tag filters; the harness must use the authenticated form to pass `tags` + `tags_match`.) Body:
   ```jsonc
   {
