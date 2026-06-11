@@ -354,6 +354,22 @@ git commit -m "feat: EVAL_PLUGIN_WORKFLOW_EDIT_STYLE passthrough for eval harnes
 
 ---
 
+### Task 4b: Stuck-draft safety net (Stop hook)
+
+**Why:** If the model ignores the recipe — leaves `!!DRAFT!!` in the file, or strips it with Bash so validation never fires — the session ends with an unvalidated/broken file. The `Stop` hook event fires when the model is about to end its turn and can block with a reason, which re-prompts the model. Deterministic, no timers.
+
+**Design:**
+- `hooks/validate-workflow.sh` records `draft_pending: <file>` in the session state file when it issues surgical INVALID feedback, and clears it whenever a validation completes VALID for that file.
+- New `hooks/check-draft-stop.sh` (Stop hook): if `draft_pending` is set and the file still has the marker → block with "remove the marker with the Edit tool"; if the file exists without the marker (Bash-removal case, no validation ran) → block with "trigger validation via Edit/Write"; file missing or nudge cap (2) reached or any error → allow stop.
+- Registered in `hooks/hooks.json` under `"Stop"`. Gated on `CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true`; only ever arms when surgical feedback set `draft_pending`.
+- Tests: new `tests/test-draft-stop-hook.sh` (validator-free — drives the Stop hook against synthetic state files) + recording/clearing assertions (validator-gated) appended to `tests/test-surgical-edit-mode.sh`.
+
+**Files:** Create `hooks/check-draft-stop.sh`, `tests/test-draft-stop-hook.sh`; Modify `hooks/validate-workflow.sh`, `hooks/hooks.json`, `tests/test-surgical-edit-mode.sh`.
+
+(Executed by tdd-implementer agent; full step-by-step spec provided in the dispatch prompt — red tests first, then implementation, regression suite, commit.)
+
+---
+
 ### Task 5: Full-suite gate (orchestrator)
 
 - [ ] **Step 1: Run the entire plugin suite**
