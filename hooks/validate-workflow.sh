@@ -14,9 +14,58 @@ read_field(){ printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys
 SID=$(read_field session_id)
 TOOL=$(read_field tool_name)
 CWD=$(read_field cwd)
-[ "$TOOL" = "Edit" ] || [ "$TOOL" = "Write" ] || exit 0
 
-FILE_PATH=$(printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys.stdin);ti=d.get('tool_input',{}) or {};print(ti.get('file_path',''))" 2>/dev/null)
+CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
+EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-rewrite}"
+STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+
+# Resolve the file to validate based on the tool event.
+# - Edit/Write: the file_path the model just wrote.
+# - Bash: validation is triggered by STATE CHANGE, not tool choice. The
+#   surgical-edit recipe asks the model to remove the !!DRAFT!! marker with the
+#   Edit tool (only Edit/Write watched), but models sometimes strip it via Bash.
+#   So on a Bash event we look up the pending draft recorded in session state and
+#   validate it IFF: it still exists, is now markerless, and its content hash
+#   changed since the last validation. An unchanged or marker-bearing draft costs
+#   nothing — this gate runs BEFORE the budget block.
+# - Any other tool: nothing to do.
+if [ "$TOOL" = "Edit" ] || [ "$TOOL" = "Write" ]; then
+  FILE_PATH=$(printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys.stdin);ti=d.get('tool_input',{}) or {};print(ti.get('file_path',''))" 2>/dev/null)
+elif [ "$TOOL" = "Bash" ]; then
+  [ -n "$SID" ] || exit 0
+  FILE_PATH=$(python3 - "$STATE_DIR" "$SID" 2>/dev/null << 'PYEOF'
+import hashlib
+import json
+import os
+import sys
+
+state_dir, sid = sys.argv[1], sys.argv[2]
+path = os.path.join(state_dir, f"{sid}.json")
+try:
+    state = json.load(open(path))
+    if not isinstance(state, dict):
+        raise SystemExit(0)
+except Exception:
+    raise SystemExit(0)
+
+dp = state.get("draft_pending")
+if not dp or not os.path.exists(dp):
+    raise SystemExit(0)
+try:
+    data = open(dp, "rb").read()
+except Exception:
+    raise SystemExit(0)
+if data.startswith(b"!!DRAFT!!"):
+    raise SystemExit(0)
+if hashlib.sha256(data).hexdigest() == state.get("last_validated_hash"):
+    raise SystemExit(0)
+print(dp)
+PYEOF
+) || exit 0
+  [ -n "$FILE_PATH" ] || exit 0
+else
+  exit 0
+fi
 [ -n "$FILE_PATH" ] || exit 0
 [ -f "$FILE_PATH" ] || exit 0
 
@@ -34,17 +83,16 @@ case "$(head -c 9 "$FILE_PATH" 2>/dev/null)" in
   "$DRAFT_MARKER") exit 0 ;;
 esac
 
-CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
-EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-rewrite}"
-STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
-
 # Best-effort draft_pending bookkeeping (Task 4b Stop-hook safety net). Failures
-# must never affect hook output or exit status. ACTION: set|clear.
+# must never affect hook output or exit status. ACTION: set|clear|hash.
+# Every action ALSO records the content hash of the just-validated file into
+# last_validated_hash (Task 4c) so a later Bash event can tell whether the draft
+# actually changed. 'hash' only updates the hash (no draft_pending change).
 update_draft_pending() {
-  # $1 = action (set|clear)
+  # $1 = action (set|clear|hash)
   [ -n "$SID" ] || return 0
   python3 - "$STATE_DIR" "$SID" "$1" "$FILE_PATH" 2>/dev/null << 'PYEOF' || true
-import json, os, sys
+import hashlib, json, os, sys
 state_dir, sid, action, file_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 path = os.path.join(state_dir, f"{sid}.json")
 try:
@@ -57,6 +105,13 @@ if action == "set":
     state["draft_pending"] = file_path
 elif action == "clear":
     state.pop("draft_pending", None)
+# All actions record the freshly-validated content hash. This helper runs after
+# any autofix copy-back, so reading the file now captures the post-fix bytes. If
+# the file can't be read, leave any previous hash untouched.
+try:
+    state["last_validated_hash"] = hashlib.sha256(open(file_path, "rb").read()).hexdigest()
+except Exception:
+    pass
 with open(path, "w") as f:
     json.dump(state, f)
 PYEOF
@@ -307,4 +362,6 @@ echo "$OUTPUT"
 # can re-prompt if the model leaves the marker (or removes it with Bash).
 if [ "$EDIT_STYLE" = "surgical" ] && [ -n "$SID" ]; then
   update_draft_pending set
+elif [ -n "$SID" ]; then
+  update_draft_pending hash
 fi
