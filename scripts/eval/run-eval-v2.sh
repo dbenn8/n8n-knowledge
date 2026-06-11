@@ -10,7 +10,7 @@
 # Usage:
 #   bash scripts/eval/run-eval-v2.sh                    # all prompts, 5 runs each
 #   bash scripts/eval/run-eval-v2.sh --limit 10         # first 10 prompts
-#   bash scripts/eval/run-eval-v2.sh --runs 3           # 3 runs per prompt
+#   bash scripts/eval/run-eval-v2.sh --runs 3           # 3 runs per prompt (default: 1)
 #   bash scripts/eval/run-eval-v2.sh --conditions plugin,mcp  # skip bare
 #   bash scripts/eval/run-eval-v2.sh --condition-advance-threshold 30
 set -euo pipefail
@@ -22,7 +22,7 @@ RESULTS_DIR="$REPO_DIR/out/eval/$TIMESTAMP-v2"
 
 # Defaults
 LIMIT=""
-RUNS=5
+RUNS=1
 CONDITIONS="plugin,mcp,bare"
 MODEL="claude-sonnet-4-6"
 BATCH_SIZE=0      # 0 = no batching (all parallel); set e.g. 32 to avoid rate limits
