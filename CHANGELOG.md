@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.8 (2026-06-11)
+
+### Validator warnings, smarter context injection, multi-node gotcha recall
+- Validator warnings now reach the model: a deduped, capped warnings block renders in both VALID and INVALID feedback (previously computed everywhere, shown nowhere).
+- Validator budget counter in feedback ("X of Y calls used") with guidance to batch fixes into one re-write instead of thrashing.
+- Node-spec injection on validation errors is deterministic and announced: error nodes ordered by error count, with an explicit "(+N more node schemas omitted)" marker instead of silent arbitrary drops.
+- Node detection noise fixes: the bare words "n8n" and "workflow" no longer match the n8n meta-node or Workflow Trigger; event phrasing ("added", "created", "updated"…) upgrades a service to its trigger variant only within the same clause, so action targets stay action nodes.
+- Gotcha recall covers all detected node types (round-robin, capped), so the first-detected node can no longer hide other nodes' known bugs.
+- Hook resilience: a timed-out semantic recall no longer discards gotcha/node-spec results; malformed recall responses degrade to no-results instead of suppressing the entire injection; hook timeouts raised.
+- Local validator suppresses false positives on dynamically loaded option lists and expression values.
+- The deep-search skill is now model-invocable and teaches validation-budget discipline.
+- Eval harness: per-run isolated config dirs, optional transcript preservation, targeted prompt selection, validator call-count reporting.
+
 ## 0.3.7 (2026-06-11)
 
 ### Plugin-side validator enrichment & deterministic scoring
