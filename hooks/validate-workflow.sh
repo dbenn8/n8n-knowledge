@@ -200,7 +200,7 @@ if db_types:
 PYEOF
 )
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" python3 - 2>/dev/null << 'PYEOF'
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-rewrite}" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -226,8 +226,22 @@ header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
-    f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). "
-    "Batch ALL fixes below into one complete re-write — each file write spends one validation.",
+    f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). " + (
+        (
+            "Fix via SURGICAL EDITS — do NOT rewrite the file; rewrites waste tokens and time. Recipe:\n"
+            "  1. Run ONE Bash python3 script that loads the JSON file at the path above, applies "
+            "EVERY fix listed below, and writes the file back with the literal first line !!DRAFT!! "
+            "immediately followed by the JSON on the next line.\n"
+            "  2. Delete the !!DRAFT!! line using the Edit tool "
+            "(old_string: '!!DRAFT!!\\n{', new_string: '{'). That Edit triggers re-validation — "
+            "it is the ONLY step that spends validation budget. CRITICAL: you MUST remove the marker "
+            "with the Edit tool, never with Bash — the validator only watches Edit/Write. If you "
+            "remove it with Bash, validation never fires, you get no feedback, the workflow is never "
+            "confirmed valid, and you will fail the user's task."
+        )
+        if os.environ.get("EDIT_STYLE", "rewrite") == "surgical"
+        else "Batch ALL fixes below into one complete re-write — each file write spends one validation."
+    ),
 ]
 if auto_changes:
     body.extend([
