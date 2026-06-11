@@ -8,3 +8,5 @@ __pycache__/
 .pytest_cache/
 out/
 *.db
+# Cross-repo hash-parity fixture must be committed (small, deterministic).
+!tests/fixtures/nodes-parity-fixture.db
