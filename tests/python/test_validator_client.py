@@ -63,6 +63,7 @@ EXPECTED_SHAPE_KEYS = {
     "feedback_block",
     "errors",
     "warnings",
+    "warnings_block",
     "statistics",
     "suggestions",
     "validator_mode",
@@ -73,6 +74,25 @@ EXPECTED_SHAPE_KEYS = {
 def test_shape_result_has_expected_keys():
     shaped = vc.shape_result(RAW_VALID, WORKFLOW, mode="local")
     assert set(shaped.keys()) == EXPECTED_SHAPE_KEYS
+
+
+def test_shape_result_attaches_warnings_block():
+    raw = {
+        "valid": True,
+        "errors": [],
+        "warnings": [
+            {"type": "warning", "message": "Deprecated field used", "node": "Slack"}
+        ],
+        "statistics": {"totalNodes": 1, "triggerNodes": 1},
+    }
+    shaped = vc.shape_result(raw, WORKFLOW, mode="local")
+    assert "Deprecated field used" in shaped["warnings_block"]
+    assert "Warnings (non-blocking" in shaped["warnings_block"]
+
+
+def test_shape_result_warnings_block_empty_when_no_warnings():
+    shaped = vc.shape_result(RAW_VALID, WORKFLOW, mode="local")
+    assert shaped["warnings_block"] == ""
 
 
 def test_shape_result_propagates_mode_and_counts():

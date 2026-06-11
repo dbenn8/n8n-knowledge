@@ -373,6 +373,50 @@ def summarize_validation(validation: dict[str, Any], max_errors: int = 8) -> lis
     return summary
 
 
+def build_warnings_block(validation: dict[str, Any], max_warnings: int = 5) -> str:
+    """Render validator warnings as a non-blocking bullet block.
+
+    Warnings share the error shape ({type, message, node}) but are advisory:
+    a workflow can be valid and still carry warnings. The block is deduped by
+    (normalized message, node), capped at ``max_warnings`` with a
+    ``(+N more warnings)`` overflow marker, and carries per-node attribution.
+    Returns an empty string when there are no warnings so callers can omit the
+    block entirely (no empty header).
+    """
+    warnings = validation.get("warnings") or []
+    seen: set[tuple[str, str | None]] = set()
+    bullets: list[str] = []
+    total_unique = 0
+
+    for warn in warnings:
+        if not isinstance(warn, dict):
+            continue
+        message = normalize_message(warn.get("message", ""))
+        if not message:
+            continue
+        node = warn.get("node")
+        key = (message, node)
+        if key in seen:
+            continue
+        seen.add(key)
+        total_unique += 1
+        if len(bullets) < max_warnings:
+            if node:
+                bullets.append(f"- [{node}] {message}")
+            else:
+                bullets.append(f"- {message}")
+
+    if not bullets:
+        return ""
+
+    lines = ["Warnings (non-blocking — review before finalizing):"]
+    lines.extend(bullets)
+    overflow = total_unique - len(bullets)
+    if overflow > 0:
+        lines.append(f"(+{overflow} more warnings)")
+    return "\n".join(lines)
+
+
 def build_issue_block(issues: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for idx, issue in enumerate(issues, start=1):

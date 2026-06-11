@@ -82,6 +82,40 @@ assert_contains "cap first call injects" "hookSpecificOutput" "$cap1"
 assert_contains "cap second call injects" "hookSpecificOutput" "$cap2"
 assert_contains "cap third call warns" "Validator limit reached for this session" "$cap3"
 
+# Valid workflow WITH warnings -> success path must render the warnings block.
+SIDW="validator-warn-valid"
+mk_payload_w(){ python3 -c "import json,sys; print(json.dumps({'session_id':sys.argv[3],'cwd':'$SCRIPT_DIR/..','tool_name':sys.argv[1],'tool_input':{'file_path':sys.argv[2],'content':'x'}}))" "$1" "$2" "$3"; }
+rm -f "$STATE_DIR/${SIDW}.json"
+VALID_WARN_MOCK='{"valid": true, "error_count": 0, "warning_count": 2, "errors": [], "warnings": [{"type":"warning","message":"Field A is deprecated","node":"Slack"},{"type":"warning","message":"Consider setting B","node":"HTTP Request"}], "statistics": {"totalNodes": 1, "triggerNodes": 1}, "suggestions": []}'
+out_vw=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$VALID_WARN_MOCK" bash "$HOOK" <<< "$(mk_payload_w Write "$WF" "$SIDW")")
+assert_contains "valid-with-warnings still passes" "Validation passed" "$out_vw"
+assert_contains "valid-with-warnings renders warnings header" "Warnings (non-blocking" "$out_vw"
+assert_contains "valid-with-warnings renders first warning" "Field A is deprecated" "$out_vw"
+assert_contains "valid-with-warnings renders second warning" "Consider setting B" "$out_vw"
+assert_contains "valid-with-warnings keeps completeness gate" "fully solve the user's original request" "$out_vw"
+
+# Valid workflow with NO warnings -> no warnings header at all.
+SIDNW="validator-warn-none"
+rm -f "$STATE_DIR/${SIDNW}.json"
+out_nw=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$VALID_MOCK" bash "$HOOK" <<< "$(mk_payload_w Write "$WF" "$SIDNW")")
+if echo "$out_nw" | grep -Fq "Warnings (non-blocking"; then echo "  FAIL: valid no-warnings omits header"; FAIL=$((FAIL+1)); else echo "  PASS: valid no-warnings omits header"; PASS=$((PASS+1)); fi
+
+# Invalid workflow WITH warnings -> invalid path renders both errors and warnings.
+SIDIW="validator-warn-invalid"
+rm -f "$STATE_DIR/${SIDIW}.json"
+INVALID_WARN_MOCK='{"valid": false, "error_count": 1, "warning_count": 1, "errors": [{"type":"error","message":"Required property '\''To'\'' cannot be empty","node":"Slack"}], "warnings": [{"type":"warning","message":"Field A is deprecated","node":"Slack"}], "statistics": {"totalNodes": 2, "triggerNodes": 1}, "suggestions": []}'
+out_iw=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_WARN_MOCK" bash "$HOOK" <<< "$(mk_payload_w Write "$WF" "$SIDIW")")
+assert_contains "invalid-with-warnings keeps error feedback" "Required property 'To' cannot be empty" "$out_iw"
+assert_contains "invalid-with-warnings renders warnings header" "Warnings (non-blocking" "$out_iw"
+assert_contains "invalid-with-warnings renders warning text" "Field A is deprecated" "$out_iw"
+
+# More than 5 warnings -> capped with overflow marker.
+SIDOV="validator-warn-overflow"
+rm -f "$STATE_DIR/${SIDOV}.json"
+OVERFLOW_WARN_MOCK=$(python3 -c "import json; print(json.dumps({'valid': True, 'error_count': 0, 'warning_count': 7, 'errors': [], 'warnings': [{'type':'warning','message':'warn %d' % i,'node':'N%d' % i} for i in range(7)], 'statistics': {'totalNodes': 1, 'triggerNodes': 1}, 'suggestions': []}))")
+out_ov=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$OVERFLOW_WARN_MOCK" bash "$HOOK" <<< "$(mk_payload_w Write "$WF" "$SIDOV")")
+assert_contains "overflow warnings show overflow marker" "(+2 more warnings)" "$out_ov"
+
 # Non-workflow JSON file -> skip.
 NONWF="$TMPDIR_TEST/package.json"
 printf '{"name":"pkg"}' > "$NONWF"
