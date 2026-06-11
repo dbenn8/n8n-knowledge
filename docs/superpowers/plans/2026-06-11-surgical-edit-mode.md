@@ -164,6 +164,8 @@ JSONEOF
   assert_contains "surgical mode instructs Bash python3 edits" "python3" "$SURGICAL_OUT"
   assert_contains "surgical mode says do not rewrite" "do NOT rewrite" "$SURGICAL_OUT"
   assert_contains "surgical mode says marker removal must use Edit" "Edit tool" "$SURGICAL_OUT"
+  assert_contains "surgical mode explains WHY Bash removal fails" "never with Bash" "$SURGICAL_OUT"
+  assert_contains "surgical mode states the failure consequence" "fail the user's task" "$SURGICAL_OUT"
   assert_not_contains "surgical mode drops the re-write guidance" "one complete re-write" "$SURGICAL_OUT"
 
   REWRITE_OUT=$(hook_input "rewrite-wording-$$" "$INVALID_FILE" | \
@@ -255,8 +257,10 @@ with:
             "immediately followed by the JSON on the next line.\n"
             "  2. Delete the !!DRAFT!! line using the Edit tool "
             "(old_string: '!!DRAFT!!\\n{', new_string: '{'). That Edit triggers re-validation — "
-            "it is the ONLY step that spends validation budget. Do NOT remove the marker with Bash; "
-            "the validator will not see the file."
+            "it is the ONLY step that spends validation budget. CRITICAL: you MUST remove the marker "
+            "with the Edit tool, never with Bash — the validator only watches Edit/Write. If you "
+            "remove it with Bash, validation never fires, you get no feedback, the workflow is never "
+            "confirmed valid, and you will fail the user's task."
         )
         if os.environ.get("EDIT_STYLE", "rewrite") == "surgical"
         else "Batch ALL fixes below into one complete re-write — each file write spends one validation."
