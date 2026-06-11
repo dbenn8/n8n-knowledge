@@ -143,11 +143,21 @@ EOF
 # Auth is seeded by copying credential files by path (never printed). The dir
 # lives OUTSIDE the repo tree and is removed on exit so credential copies can
 # never be committed.
+# Startup sweep: remove scratch dirs stranded by previously hard-killed runs.
+# Age-gated (>3h) so a concurrently RUNNING harness's fresh dir is never swept.
+find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'n8n-eval-claude-config.*' -type d -mmin +180 -exec rm -rf {} + 2>/dev/null || true
 EVAL_SCRATCH_CONFIG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/n8n-eval-claude-config.XXXXXX")
 [ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$EVAL_SCRATCH_CONFIG_DIR/.claude.json"
 [ -f "$HOME/.claude/.credentials.json" ] && cp "$HOME/.claude/.credentials.json" "$EVAL_SCRATCH_CONFIG_DIR/.credentials.json"
 export CLAUDE_CONFIG_DIR="$EVAL_SCRATCH_CONFIG_DIR"
-trap 'rm -rf "$EVAL_SCRATCH_CONFIG_DIR"' EXIT
+# Clean up credential copies on EVERY exit path we can trap. SIGKILL cannot be
+# trapped — the startup sweep below handles dirs stranded by a hard kill.
+cleanup_scratch_config() { rm -rf "$EVAL_SCRATCH_CONFIG_DIR"; }
+trap cleanup_scratch_config EXIT
+# On INT/TERM the cleanup runs twice (signal handler + the EXIT trap that fires
+# on the handler's own `exit`); rm -rf is idempotent, so the double call is safe.
+trap 'cleanup_scratch_config; exit 130' INT
+trap 'cleanup_scratch_config; exit 143' TERM
 
 describe_condition_isolation() {
   local cond="$1"
