@@ -18,7 +18,8 @@ do_structured_recall() {
   local query_escaped
   query_escaped=$(printf '%s node specification' "$display_name" | recall_json_escape)
 
-  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 3000, "tags": %s, "tags_match": "all"}' \
+  # source facts carry the observation provenance (URLs/engagement); without the flag the API strips source_fact_ids entirely.
+  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 3000, "tags": %s, "tags_match": "all", "include": {"source_facts": {}}}' \
     "$query_escaped" "$tags_json")"
 }
 
@@ -35,6 +36,7 @@ do_gotcha_recall() {
   # github corpus" and drowned the node-specific signal (merge queries returned
   # Facebook/Salesforce error-output noise). Pure semantic ranking on the
   # node-name query returns the actual node's known issues.
-  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 2000}' \
+  # source facts carry the observation provenance (URLs/engagement); without the flag the API strips source_fact_ids entirely.
+  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 2000, "include": {"source_facts": {}}}' \
     "$query_escaped")"
 }
