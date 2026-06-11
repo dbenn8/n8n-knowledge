@@ -118,12 +118,41 @@ def test_redacts_underscore_author():
     )
 
 
-def test_redacts_case_insensitive():
-    # Prose lowercases the handle ("chrisyk"); the known author is "Chrisyk".
-    assert (
-        redact_known_handles("the fix from chrisyk worked", {"Chrisyk"})
-        == "the fix from a community user worked"
-    )
+def test_lowercase_prose_of_capitalized_handle_survives():
+    # Case calibration (review 2026-06-11): matching is case-sensitive
+    # (as-stored + capitalized variant). A capitalized author "Set"/"Code"
+    # must never clobber lowercase technical prose; lowercase prose of a
+    # capitalized handle going unredacted is accepted under-redaction.
+    assert redact_known_handles("set the value with the code node", {"Set", "Code"}) \
+        == "set the value with the code node"
+    assert redact_known_handles("chrisyk wrote this", {"Chrisyk"}) \
+        == "chrisyk wrote this"
+
+
+def test_capitalized_variant_of_lowercase_handle_redacts():
+    # Sentence-start capitalization of a lowercase-stored handle still matches.
+    assert redact_known_handles("Dani fixed it", {"dani"}) == "a community user fixed it"
+
+
+def test_author_named_user_does_not_double_substitute():
+    # Review C1: sequential per-name substitution let an author named "User"
+    # re-match the injected replacement token. Single-pass alternation fixes it.
+    out = redact_known_handles("Chrisyk fixed the User node", {"Chrisyk", "User"})
+    assert "a community a community user" not in out
+    assert out == "a community user fixed the a community user node"
+
+
+def test_overlapping_names_each_redact_once():
+    assert redact_known_handles("Dani and Dan disagree", {"Dan", "Dani"}) \
+        == "a community user and a community user disagree"
+
+
+def test_nonword_boundary_usernames_redact():
+    # re.escape + \b behaves correctly for handles with leading/trailing or
+    # embedded non-word chars; pin so escape behavior can't silently regress.
+    assert redact_known_handles("fix by dan-k applied", {"dan-k"}) == "fix by a community user applied"
+    assert redact_known_handles("dan.k posted it", {"dan.k"}) == "a community user posted it"
+    assert redact_known_handles("thanks _dan_ for this", {"_dan_"}) == "thanks a community user for this"
 
 
 def test_redacts_possessive_form():

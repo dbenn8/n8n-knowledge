@@ -399,20 +399,30 @@ def collect_source_usernames(r, source_facts):
 
 
 def redact_known_handles(text, names):
-    """Replace each known source-author name (case-insensitive, whole-word,
-    with an optional leading ``user `` absorbed) with ``a community user``.
+    """Replace each known source-author name (whole-word, with an optional
+    leading ``user `` absorbed) with ``a community user``.
 
-    Longest names first so a name that is a prefix of another doesn't shadow
-    it. The trailing ``\\b`` permits a possessive ``'s`` to remain after the
-    replacement ("Chrisyk's workflow" -> "a community user's workflow"). Only
-    the names passed in are candidates, so technical prose is never corrupted.
+    Single-pass alternation, longest-first, so the injected replacement is
+    never re-scanned — an author literally named "User" must not re-match the
+    token we just inserted (review finding C1, 2026-06-11). Matching is
+    case-sensitive against the name as stored plus a capitalized variant:
+    a capitalized author named "Set" or "Code" must never clobber lowercase
+    technical prose, while a lowercase-stored handle still matches at sentence
+    start. Lowercase prose of a capitalized handle going unredacted is
+    accepted under-redaction. The trailing ``\\b`` permits a possessive
+    ``'s`` to remain ("Chrisyk's workflow" -> "a community user's workflow").
+    Only the names passed in are candidates, so technical prose outside an
+    exact-case collision is never corrupted.
     """
     if not text or not names:
         return text
-    for name in sorted(names, key=len, reverse=True):
-        pattern = re.compile(r"\b(?:user\s+)?" + re.escape(name) + r"\b", re.IGNORECASE)
-        text = pattern.sub("a community user", text)
-    return text
+    variants = set()
+    for name in names:
+        variants.add(name)
+        variants.add(name[:1].upper() + name[1:])
+    alt = "|".join(re.escape(n) for n in sorted(variants, key=len, reverse=True))
+    pattern = re.compile(r"\b(?:[Uu]ser\s+)?(?:" + alt + r")\b")
+    return pattern.sub("a community user", text)
 
 
 def redact_preserving_urls(text, names):
