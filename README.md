@@ -2,80 +2,211 @@
 
 **v0.3.7**
 
-Stop babysitting web search permissions. Get instant, curated n8n answers with source links.
+A Claude Code plugin that makes Claude better at n8n. When it detects you're working on
+n8n, hooks automatically recall curated n8n knowledge (docs, GitHub issues with status,
+community workarounds, node specs) and inject it as context — no web-search permissions, no
+MCP server, no API keys. When Claude writes a workflow JSON file, an optional `PostToolUse`
+hook validates it against the real n8n validation engine, feeds the errors back, and lets
+Claude fix them in the same turn.
 
-This Claude Code plugin connects to a centralized [Hindsight](https://hindsight.vectorize.io) knowledge base with 42,000+ curated data points from n8n's ecosystem — official docs, GitHub issues with status, community solutions and workarounds, feature requests with vote counts, and the n8n source code. It works out of the box with no setup, API keys, or configuration required.
+The knowledge is served by a hosted [Hindsight](https://github.com/dbenn8/n8n-hindsight)
+memory instance (bank `n8n`, 245k+ memories). Validation is served either by a cloud
+validator microservice or by a local `n8n-mcp` install you point it at. Both the knowledge
+service and the validator are open source and self-hostable — see
+[n8n-hindsight](https://github.com/dbenn8/n8n-hindsight).
 
-Hindsight's [TEMPR recall](https://hindsight.vectorize.io/developer/retrieval) (Temporal Entity Memory Priming Retrieval) runs four search strategies in parallel — semantic, BM25 keyword, graph traversal, and temporal — merged via Reciprocal Rank Fusion and cross-encoder reranking. It's the first agent memory system to [surpass 90% accuracy on LongMemEval](https://hindsight.vectorize.io/developer/performance), with zero LLM cost per recall and 100-600ms typical latency. Every result includes a source link back to the specific doc page, GitHub issue, or community post so you or the model can quickly verify the original context.
+> **Trust note up front:** auto-recall sends your prompt text to the author's hosted recall
+> endpoint when n8n context is detected, and the optional validator can send your workflow
+> JSON to a cloud service. Read [What data leaves your machine](#what-data-leaves-your-machine)
+> before installing. Everything is local-only or self-hostable if you'd rather it not.
 
 ## Install
 
 ```bash
-/plugin install n8n-knowledge@n8n-local
+/plugin install n8n-knowledge@n8n-knowledge-local
 ```
 
-Or clone and install locally:
+Or clone and install as a local marketplace:
 
 ```bash
 git clone https://github.com/dbenn8/n8n-knowledge.git
-# Add as local marketplace in Claude Code:
+# In Claude Code:
 # /plugin marketplace add /path/to/n8n-knowledge
 # /plugin install n8n-knowledge@n8n-knowledge-local
 ```
+
+No setup, API keys, or configuration required to start. The plugin ships with the node
+lookup dictionary checked in and points at the hosted knowledge service by default.
+
+## Architecture
+
+Three repos, one system. This plugin is the client; the other two are the backend.
+
+```mermaid
+flowchart TD
+    subgraph local["Your machine — Claude Code"]
+        UP["UserPromptSubmit hook<br/>detect-n8n + keyword gate"]
+        NL["node_lookup.py<br/>3,591-entry dictionary"]
+        PT["PostToolUse hook<br/>workflow JSON validation<br/>(optional, off by default)"]
+        BS["PostToolUse backstop<br/>mid-turn refresh"]
+    end
+
+    subgraph svc["n8n-hindsight — knowledge service (hosted by author)"]
+        REC["/public/recall<br/>(unauthenticated, rate-limited)"]
+        BANK["Hindsight bank: n8n<br/>245k+ memories"]
+    end
+
+    subgraph val["n8n-validator — validation microservice"]
+        VW["/public/validate-workflow"]
+        VH["/public/validator-health<br/>versions + nodes_content_sha256"]
+    end
+
+    LOCALV["Local n8n-mcp install<br/>(EVAL_PLUGIN_VALIDATOR_MODE=local)"]
+
+    UP -->|"prompt text + tag filters"| REC
+    NL --> UP
+    BS -->|"fresh-keyword query"| REC
+    REC --> BANK
+    PT -->|"workflow JSON (cloud mode)"| VW
+    PT -->|"workflow JSON (local mode)"| LOCALV
+    PT -.->|"preflight parity check"| VH
+    VH -.->|"hash/version match → run<br/>mismatch → fail closed"| PT
+```
+
+- **Recall path:** prompt text (+ tag filters for detected node names) goes to
+  `/public/recall`, which serves from the `n8n` Hindsight bank. The endpoint is
+  unauthenticated and rate-limited; the key is injected server-side by nginx.
+- **Validation path:** workflow JSON goes to `/public/validate-workflow` (cloud) or a local
+  `n8n-mcp` install (local mode). Before an eval run trusts a validator, it compares the
+  validator's `nodes_content_sha256` and engine versions against its own via
+  `/public/validator-health` and **fails closed on mismatch** — so plugin-time validation
+  and post-hoc scoring can never silently use different node data.
 
 ## What it does
 
 ### Design layer (gotchas, issues, docs)
 
-- **Auto-recall** — detects n8n keywords in your messages and injects relevant docs, issues, and community solutions as context (~5 results, <1 second)
-- **Manual recall** — ask Claude to search deeper when auto-recall didn't trigger (~20 results)
-- **Confidence scoring** — each result annotated HIGH/MEDIUM/LOW based on source type and engagement metrics (votes, likes, views, solved status), with user-configurable thresholds
-- **GitHub issue state** — every GitHub result is prefixed with its canonical state, e.g. `[OPEN]` or `[CLOSED·completed·2026-02-26]` / `[CLOSED·not_planned·…]`. The model is warned that `[CLOSED·completed]` usually means already fixed, `[CLOSED·not_planned]` means n8n won't fix it, and versions in result text are the reporter's environment — so it never builds a workaround for a bug that's already resolved.
-- **Backstop recall** — refreshes n8n context during an agentic session (after Edit/Write/Task), not just on your prompt — gated, deduped, and capped. See [Backstop recall](#backstop-recall-mid-turn-context).
-- **Source citations** — every result links to the specific doc page, GitHub issue, or community post
+- **Auto-recall** — detects n8n keywords in your messages and injects relevant docs, issues,
+  and community solutions as context (~5 results, sub-second).
+- **Manual recall** — `/n8n-knowledge` searches deeper when auto-recall didn't trigger (~20 results).
+- **Confidence scoring** — each result annotated HIGH/MEDIUM/LOW based on source type and
+  engagement metrics (votes, likes, views, solved status), with user-configurable thresholds.
+- **GitHub issue state** — every GitHub result is prefixed with its canonical state, e.g.
+  `[OPEN]` or `[CLOSED·completed·2026-02-26]` / `[CLOSED·not_planned·…]`. The model is warned
+  that `[CLOSED·completed]` usually means already fixed and `[CLOSED·not_planned]` means n8n
+  won't fix it — so it never builds a workaround for a bug that's already resolved.
+- **Backstop recall** — refreshes n8n context *during* an agentic turn (after Edit/Write/Task),
+  not just on your prompt — gated, deduped, and capped. See [Backstop recall](#backstop-recall-mid-turn-context).
+- **Source citations** — every result links to the specific doc page, GitHub issue, or community post.
 
 ### Build layer (node specs, workflow examples)
 
-- **Node-name detection** — identifies n8n node names mentioned in prompts (3,591-entry dictionary covering all official and community nodes). Handles trigger-intent detection ("listen for Gmail events" → gmailTrigger), camelCase splitting ("httpRequest" → "http request"), and compound service names ("sentryIo" → "sentry").
-- **Structured node-spec recall** — when a node name is detected, issues a parallel tag-filtered recall (`type:node-spec` + `node:<type>`) that returns the node's operations, fields, types, and defaults. Rendered as compact `kind="node-spec"` blocks at HIGH confidence, separate from regular results.
-- **13,000+ node specifications** — every n8n node (1,851 nodes) split into per-resource, per-operation units. Large multi-resource nodes like Slack (44 ops), Salesforce (65 ops), and Gmail (26 ops) are split so each operation's fields are individually recallable.
-- **28 official workflow examples** — node-level wiring context, topology maps, and full importable JSON. Sticky notes and source JSON suppressed from auto-recall (available via manual recall to avoid context bloat).
+- **Node-name detection** — identifies n8n node names mentioned in prompts via a
+  **3,591-entry lookup dictionary** (`hooks/lib/node_lookup_data.json`) covering name variants
+  for official and community nodes. Handles trigger-intent detection ("listen for Gmail events"
+  → `gmailTrigger`), camelCase splitting ("httpRequest" → "http request"), and compound service
+  names ("sentryIo" → "sentry").
+- **Structured node-spec recall** — when a node name is detected, issues a parallel
+  tag-filtered recall (`type:node-spec` + `node:<type>`) returning the node's operations,
+  fields, types, and defaults, rendered as compact `kind="node-spec"` blocks at HIGH confidence.
+- **13,000+ node-spec units** — n8n-mcp's `nodes.db` ships **1,851 nodes**; these are split
+  into **13,000+ per-resource, per-operation spec units** in the knowledge bank. Large
+  multi-resource nodes like Slack (44 ops), Salesforce (65 ops), and Gmail (26 ops) are split
+  so each operation's fields are individually recallable.
+- **28 official workflow examples** — node-level wiring context, topology maps, and full
+  importable JSON. Sticky notes and source JSON are suppressed from auto-recall (available via
+  manual recall to avoid context bloat).
+
+### Workflow validation hook (optional, off by default)
+
+When enabled (`Enable Workflow Validation`), a `PostToolUse` hook fires after Claude writes or
+edits a workflow JSON file:
+
+- runs only on plugin-side `Edit`/`Write` events, on workflow JSON only;
+- validates via the routing settings below (`local`, `cloud`, or `default`);
+- injects the validator's errors back into the turn as additional context, with targeted
+  edit guidance (parameter paths, allowed enum values) and a **completeness gate** so Claude
+  fixes the workflow before declaring it done;
+- caps validator calls per session (`Workflow Validation Max Calls`, default `3`).
+
+This hook is plugin-side only. It does not affect the eval harness conditions or the local
+post-hoc validation scripts.
 
 ### Project detection
 
-Two-tier repo detection with multiple signals:
+- **n8n codebase** — `package.json` with an n8n dependency, `.n8n.json` config, a README
+  mentioning "n8n", or workflow JSON files (`{"name":"...","nodes":[...]}`).
+- **n8n consumer** — `docker-compose.yml` referencing n8n.
+- **Keyword gating** — broad keywords (workflow, node, trigger, webhook, …) fire in n8n
+  projects; only the explicit token `n8n` fires in consumer repos. Zero noise in non-n8n projects.
 
-- **n8n codebase** — `package.json` with n8n dependency, `.n8n.json` config files, README mentioning "n8n", or workflow JSON files (`{"name":"...","nodes":[...}`)
-- **n8n consumer** — `docker-compose.yml` referencing n8n
-- **Keyword gating** — broad keywords (workflow, node, trigger, webhook, etc.) fire in n8n projects; only explicit "n8n" fires in consumer repos. Zero noise in non-n8n projects.
+## What data leaves your machine
 
-### Debug mode
+This is the trust section. Plainly:
 
-See exactly what context is injected into Claude's prompt:
+- **Your prompt text** is sent to the author's hosted recall endpoint
+  (`https://n8nhindsight.applikuapp.com/public/recall`) **whenever n8n context is detected**
+  (auto-recall on your message, and backstop recall after Edit/Write/Task during a turn). That
+  endpoint is **unauthenticated and rate-limited** — it is the author's personal hosted
+  Hindsight instance, not an official n8n service. If you don't want your prompts leaving your
+  machine, disable auto-recall and backstop recall, or self-host the service (see below).
+- **Your workflow JSON** is sent to the **cloud validator**
+  (`https://n8nvalidator.applikuapp.com/public/validate-workflow`) when the optional workflow
+  validation hook runs in cloud or default mode *and no local validator is found*. In `local`
+  mode (or default mode with a local `n8n-mcp` install present), validation runs entirely on
+  your machine and **no workflow JSON leaves it**.
+- **Nothing else.** No credentials, no file contents beyond the workflow JSON you asked it to
+  validate, no telemetry.
+- **Debug log:** injected context is written locally to `/tmp/n8n-knowledge-debug.log` when
+  `debugRecall` is `summary` (default) or `full`. Set it to `off` to disable. Inspect exactly
+  what's being injected with:
 
-```bash
-# In another terminal:
-tail -f /tmp/n8n-knowledge-debug.log
-```
+  ```bash
+  tail -f /tmp/n8n-knowledge-debug.log
+  ```
 
-Set `debugRecall` to control output:
-- `summary` (default) — first 30 lines with line count
-- `full` — complete injected context
-- `off` — no debug output
+## Self-hosting and escape hatches
 
-## What's in the knowledge base
+- **Local-only validation:** set `EVAL_PLUGIN_VALIDATOR_MODE=local` (or `validator_mode: local`
+  in `.claude/n8n-knowledge.local.md`) to require a local `n8n-mcp` install and keep workflow
+  JSON on your machine. The plugin auto-detects the default `n8n-mcp` root under
+  `~/.npm/_npx/.../node_modules/n8n-mcp`, or you can point it explicitly with
+  `validator_local_path`.
+- **Disable network recall:** turn off `enableAutoRecall` and `enableBackstopRecall` to stop
+  all prompt text from leaving your machine. (You lose recall, obviously.)
+- **Self-host the whole backend:** the knowledge service *and* the validator are open source.
+  See [n8n-hindsight](https://github.com/dbenn8/n8n-hindsight) — it includes the sync pipeline,
+  the ops-proxy, the validator microservice, the nginx config, and the Appliku deploy. Stand up
+  your own instance and point `validator_cloud_url` at it.
 
-| Source | Count | Updated |
-|---|---|---|
-| Official docs (docs.n8n.io) | 315 pages | Nightly |
-| GitHub issues & PRs | 4,500+ | Nightly |
-| Community questions | 35,000+ | Nightly |
-| Feature requests (with vote counts) | 2,600+ | Nightly |
-| Built with n8n examples | 1,100+ | Nightly |
-| n8n source code (core packages) | 6,200+ files | Nightly |
-| Node specifications | 13,000+ units | On release |
-| Workflow examples | 28 workflows | On release |
+## Eval results (honest comparison)
 
+The plugin was benchmarked against the community **n8n-mcp** server on a **128-prompt
+workflow-generation benchmark** (June 11, 2026, spec-injection v2). The validated-workflow
+metric is "does the generated workflow pass n8n-mcp's full validation engine."
+
+| Model          | Plugin (validated) | n8n-mcp condition | Delta            |
+|----------------|--------------------|-------------------|------------------|
+| DeepSeek       | 64.8%              | 66.4%             | −1.6pp (MCP ahead) |
+| Claude Sonnet  | 62.5%              | 60.9%             | +1.6pp (plugin ahead) |
+
+**Read this honestly:** on raw validation pass rate the plugin and the MCP server are
+**effectively tied** — within ~1.6 percentage points either direction depending on the model.
+The plugin is not a validation-quality silver bullet.
+
+Where the plugin *does* differ:
+
+- **Tokens:** the plugin uses roughly **35–40% fewer tokens** than the MCP condition — it
+  injects the relevant specs as context instead of making the model drive a tool-call loop.
+- **Tool turns:** far fewer tool round-trips (the MCP condition spends turns searching and
+  fetching; the plugin front-loads the context).
+- **Gotcha awareness:** the plugin surfaces **1.5–2× more known-bug "gotchas"** (designing
+  around documented n8n issues) because issue/community context is injected, not just node schemas.
+
+So: comparable correctness, materially cheaper, and better at avoiding known footguns. An
+earlier, differently-scored run is committed at
+[`docs/eval-findings-run1.md`](docs/eval-findings-run1.md) — the numbers there are older and
+not directly comparable to the v2 figures above.
 
 ## Configuration
 
@@ -83,81 +214,74 @@ Set `debugRecall` to control output:
 
 | Setting | Default | Description |
 |---|---|---|
-| `enableAutoRecall` | `true` | Auto-recall on every message. Disable for manual-only (saves tokens). |
+| `enableAutoRecall` | `true` | Auto-recall on every message. Disable for manual-only (saves tokens, stops prompt text leaving your machine). |
 | `showRecallResults` | `true` | When enabled, Claude cites the knowledge base. When disabled, Claude uses the context silently. |
-| `debugRecall` | `summary` | Show injected context in `/tmp/n8n-knowledge-debug.log`. Options: `off`, `summary`, `full`. |
-
-### Backstop recall (mid-turn context)
-
-Auto-recall only fires on **your** message (the `UserPromptSubmit` hook). But a long agentic turn drifts: by the time Claude has read files, edited code, and spun up subagents, the original recall context may be stale or about a different topic than what it's now working on.
-
-Backstop recall fills that gap by refreshing n8n knowledge-base context **during** the agent's reasoning turn:
-
-- **After `Edit`/`Write`/`Task` tool calls** — a `PostToolUse` hook inspects what Claude just wrote, extracts a fresh-keyword-anchored query, and injects a new `<result>` block as `additionalContext`. Topics already covered this session are skipped, and recalls are capped per session so it stays quiet once Claude has what it needs.
-- **Into `Task` subagents** — an optional `PreToolUse` hook can prepend the recalled context directly into a subagent's prompt so dispatched agents start with the relevant n8n knowledge. This is **off by default** (experimental).
-
-It complements auto-recall rather than replacing it: auto-recall covers the user's question, backstop recall covers where the work actually goes.
-
-#### Options
-
-| Setting | Default | Description |
-|---|---|---|
-| `enableBackstopRecall` | `true` | Refresh n8n context during agent reasoning (after Edit/Write/Task). Disable to save tokens. |
+| `enableWorkflowValidation` | `false` | Plugin-side validation after Claude writes/edits workflow JSON. |
+| `workflowValidationMaxCalls` | `3` | Max plugin-side validator calls per session. |
+| `enableBackstopRecall` | `true` | Refresh n8n context during agent reasoning (after Edit/Write/Task). |
 | `backstopRecallCap` | `4` | Max backstop recalls per session. |
 | `backstopRecallMaxTokens` | `8000` | Returned-context size cap per backstop recall. |
 | `backstopRecallBudget` | `high` | Hindsight recall effort: `low`, `mid`, or `high`. |
-| `enableSubagentInjection` | `false` | Prepend n8n context into Task subagent prompts (experimental). |
-| `triggerKeywords` | `""` (defaults) | Comma-separated broad keywords that trigger recall inside n8n codebases. See below. |
+| `validatorMode` | `default` | Validator routing: `local`, `cloud`, or `default` (prefer local n8n-mcp, fall back to cloud). |
+| `validatorCloudUrl` | `""` | Cloud validator endpoint URL. |
+| `validatorLocalPath` | `""` | Override the local n8n-mcp install root (blank = auto-detect). |
+| `debugRecall` | `summary` | Local debug output to `/tmp/n8n-knowledge-debug.log`: `off`, `summary`, `full`. |
+
+> `enableSubagentInjection` exists but is **work-in-progress and unverified** — leave it off.
+
+### Backstop recall (mid-turn context)
+
+Auto-recall only fires on **your** message (`UserPromptSubmit`). But a long agentic turn drifts:
+by the time Claude has read files, edited code, and spun up subagents, the original recall
+context may be stale. Backstop recall fills that gap:
+
+- **After `Edit`/`Write`/`Task`** — a `PostToolUse` hook inspects what Claude just wrote,
+  extracts a fresh-keyword-anchored query, and injects a new `<result>` block as
+  `additionalContext`. Topics already covered this session are skipped, and recalls are capped
+  per session.
+
+It complements auto-recall rather than replacing it: auto-recall covers the user's question,
+backstop recall covers where the work actually goes.
 
 #### Trigger keywords and the `DEFAULTS` sentinel
 
-Inside an n8n codebase, recall fires on a set of broad keywords (in consumer repos, only the explicit token `n8n` triggers it). The current built-in default list is:
+Inside an n8n codebase, recall fires on a set of broad keywords (in consumer repos, only the
+explicit token `n8n` triggers it). The built-in default list is:
 
 ```
 workflow, node, trigger, webhook, credential, expression, execution
 ```
 
-`triggerKeywords` lets you customize this list. The special token `DEFAULTS` expands inline to the built-in list above, so you can extend it without retyping every keyword:
+`triggerKeywords` customizes this. The token `DEFAULTS` expands inline to the built-in list:
 
 - **Extend** — `DEFAULTS, mynode` → the built-ins **plus** `mynode`.
-- **Replace** — `workflow, node, mything` → exactly these three; the rest of the built-ins are dropped.
-- **Reset** — leave the field blank (or include `DEFAULTS`) to use the built-in list.
+- **Replace** — `workflow, node, mything` → exactly these three.
+- **Reset** — leave blank (or include `DEFAULTS`) to use the built-in list.
 
 ### Scoring tuning (optional)
 
-Each auto-recalled result gets a confidence score based on its source type, engagement metrics, and resolution signals. You can tune the scoring per project by creating `.claude/n8n-knowledge.local.md`. All fields are optional — only override what you want to change.
+Each auto-recalled result gets a confidence score based on source type, engagement metrics, and
+resolution signals. Tune it per project via `.claude/n8n-knowledge.local.md`. All fields are
+optional — only override what you want to change.
 
 ```markdown
 ---
-# Confidence level thresholds
 high_threshold: 70
 medium_threshold: 50
-
-# Base scores by source type
 docs_base: 80
 github_base: 49
 community_base: 40
-
-# GitHub-specific bonuses
 clear_signal_bonus: 25
 author_member_bonus: 5
-
-# Community engagement bonuses
 solved_bonus: 25
-
-# Engagement bonuses
 high_engagement_threshold: 10
 high_engagement_bonus: 20
 medium_engagement_threshold: 3
 medium_engagement_bonus: 10
 high_views_threshold: 500
 views_bonus: 5
-
-# Result limits
 max_results: 5
 max_low_results: 1
-
-# Text truncation per confidence level (-1 = no limit)
 max_text_length_high: -1
 max_text_length_medium: 800
 max_text_length_low: 300
@@ -166,47 +290,22 @@ max_text_length_low: 300
 
 Add `.claude/*.local.md` to your `.gitignore`.
 
-### Validator routing (optional)
-
-For the future plugin-side validator integration, you can preconfigure how the plugin should choose between a local validator and the cloud validator endpoint in `.claude/n8n-knowledge.local.md`:
-
-```markdown
----
-validator_mode: default
-validator_cloud_url: https://your-host/public/validate-workflow
-validator_local_path: ""
----
-```
-
-Behavior:
-
-- `validator_mode: local` — require a local validator install
-- `validator_mode: cloud` — require `validator_cloud_url`
-- `validator_mode: default` — prefer a local `n8n-mcp` install if found, otherwise fall back to `validator_cloud_url`
-
-`validator_local_path` is optional. If left blank, the plugin auto-detects the default local `n8n-mcp` install root under `~/.npm/_npx/.../node_modules/n8n-mcp`.
-
-These settings are for plugin-side validation routing only. They are not meant for the eval harness conditions (`plugin`, `mcp`, `bare`) or for local post-hoc validator scripts/tests, which should continue to use their own explicit local validator paths.
-
-You can inspect the resolved choice with:
+You can inspect the resolved validator choice with:
 
 ```bash
 python3 hooks/lib/resolve_validator_target.py "$PWD"
 ```
 
-### Workflow validation hook (optional)
+## How it works
 
-The plugin can also inject validator feedback after Claude writes or edits an n8n workflow JSON file, but this is disabled by default.
+1. `UserPromptSubmit` hook fires on every message.
+2. `detect-n8n.sh` checks if the message is n8n-related (multi-signal repo detection + keyword matching).
+3. `node_lookup.py` identifies node names in the prompt for structured recall.
+4. `recall.sh` curls `/public/recall` (semantic); `structured_recall.sh` curls with tag filters (node specs).
+5. Results merged (node specs prepended), scored by `format_results.py`, and injected as `additionalContext`.
+6. Debug output written to `/tmp/n8n-knowledge-debug.log` unless `debugRecall` is `off`.
 
-Enable `Workflow Validation` in the plugin settings to turn it on. When enabled:
-
-- it runs only on plugin-side `Edit`/`Write` tool events
-- it validates written workflow JSON files only
-- it uses the validator routing settings above (`local`, `cloud`, or `default`)
-- it caps validator calls per session using `Workflow Validation Max Calls` (default `3`)
-- it injects validator feedback back into the turn as `PostToolUse` additional context
-
-This hook is plugin-side only. It does not affect the eval harness conditions or the local post-hoc validation scripts.
+No MCP server. No daemon. No dependencies beyond bash, curl, and the Python stdlib.
 
 ## Refreshing node specs
 
@@ -216,18 +315,8 @@ When a new n8n version ships with updated nodes:
 bash scripts/refresh-node-lookup.sh
 ```
 
-This fetches the latest `n8n-mcp` package, regenerates the node dictionary, and runs validation tests. The dictionary is checked into the repo so users don't need to run this themselves.
-
-## How it works
-
-1. `UserPromptSubmit` hook fires on every message
-2. `detect-n8n.sh` checks if the message is n8n-related (multi-signal repo detection + keyword matching)
-3. `node_lookup.py` identifies node names in the prompt for structured recall
-4. `recall.sh` curls the Hindsight API (semantic), `structured_recall.sh` curls with tag filters (node specs)
-5. Results merged (node specs prepended), scored by `format_results.py`, and injected as `additionalContext`
-6. Debug output written to `/tmp/n8n-knowledge-debug.log` if `debugRecall` is not `off`
-
-No MCP server. No daemon. No dependencies. Just bash, curl, and Python stdlib.
+This fetches the latest `n8n-mcp` package, regenerates the node dictionary, and runs validation
+tests. The dictionary is checked into the repo so users don't need to run this themselves.
 
 ## Tests
 
@@ -235,19 +324,21 @@ No MCP server. No daemon. No dependencies. Just bash, curl, and Python stdlib.
 bash tests/run-all.sh
 ```
 
-165 tests across 9 test files: detection, recall formatting, node lookup, structured recall, lookup integrity, GitHub state, observation scoring, backstop recall, and integration.
+**184 assertions across 10 test files**, all passing: auto-recall, detection, recall
+formatting, node lookup, structured recall, lookup integrity, GitHub state, observation
+scoring, backstop recall, and workflow validation.
 
 ## Roadmap
 
-- **Workflow scoring** — workflow example units currently score LOW in auto-recall; need their own scoring path or tag-based boosting
-- **Richer workflow tags** — add trigger type, complexity, use-case, and integration tags to workflow units for better semantic matching
-- **More workflow sources** — expand beyond the 28 official docs examples to the n8n template library
-- **Public retain with trust tiers** — community contributions tagged and weighted by Discourse identity and trust level
-- **Prompt injection filtering** — pre-filter + LLM classifier on community content before ingestion
+- **Workflow scoring** — workflow example units currently score LOW in auto-recall; need their own scoring path.
+- **Richer workflow tags** — trigger type, complexity, use-case, integration tags for better matching.
+- **More workflow sources** — expand beyond the 28 official docs examples to the template library.
+- **Public retain with trust tiers** — community contributions weighted by Discourse trust level.
+- **Prompt injection filtering** — pre-filter + LLM classifier on community content before ingestion.
 
 ## Contributing
 
-PRs welcome! The knowledge base is public and auto-syncs nightly. If you want to improve the plugin itself:
+PRs welcome. The knowledge base is public and auto-syncs nightly. To improve the plugin:
 
 1. Fork the repo
 2. Make changes
