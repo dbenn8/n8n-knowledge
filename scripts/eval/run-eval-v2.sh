@@ -38,6 +38,15 @@ REPAIR_MAX_ATTEMPTS="${EVAL_REPAIR_MAX_ATTEMPTS:-3}"  # number of repair rounds 
 CONDITION_ADVANCE_THRESHOLD="${EVAL_CONDITION_ADVANCE_THRESHOLD:-30}"  # start next condition after N completed runs
 MAX_IN_FLIGHT_RUNS="${EVAL_MAX_IN_FLIGHT_RUNS:-0}"    # 0 = unlimited; caps total concurrent runs across conditions
 MODEL_TIMEOUT_SECONDS="${EVAL_MODEL_TIMEOUT_SECONDS:-240}"  # 0 = no timeout
+# 1 = keep session transcripts: sessions run WITH persistence and the transcript
+# JSONL is moved into the per-run folder as prompt-NNN-runNN.transcript.jsonl,
+# so every tool call / hook injection / validator round is reviewable post-run.
+# Default 0 (off) to avoid transcript-dir churn on large batch runs.
+KEEP_TRANSCRIPTS="${EVAL_KEEP_TRANSCRIPTS:-0}"
+SESSION_PERSIST_ARGS=(--no-session-persistence)
+if [ "$KEEP_TRANSCRIPTS" = "1" ]; then
+  SESSION_PERSIST_ARGS=()
+fi
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -73,11 +82,15 @@ while IFS=$'\t' read -r fileidx pid pprompt; do
   IDS+=("$pid")
   PROMPTS+=("$pprompt")
 done < <(python3 - "$GT_FILE" "$EVAL_GROUPS" << 'PYEOF'
-import json, sys
+import json, os, sys
 
 gt_file = sys.argv[1]
 groups_arg = sys.argv[2] if len(sys.argv) > 2 else ""
 allowed = set(g.strip() for g in groups_arg.split(",") if g.strip()) if groups_arg else set()
+# Optional: restrict to specific ground-truth line indices (comma-separated),
+# e.g. EVAL_PROMPT_FILE_IDXS=89,101,107 for targeted hard-prompt tests.
+idxs_arg = os.environ.get("EVAL_PROMPT_FILE_IDXS", "").strip()
+allowed_idxs = set(int(x) for x in idxs_arg.split(",") if x.strip()) if idxs_arg else None
 
 with open(gt_file) as f:
     for i, line in enumerate(f):
@@ -87,6 +100,8 @@ with open(gt_file) as f:
         e = json.loads(line)
         g = e.get("group", "")
         if allowed and g and g not in allowed:
+            continue
+        if allowed_idxs is not None and i not in allowed_idxs:
             continue
         # Tab-separated: fileidx \t id \t prompt (prompt may not contain tabs)
         prompt = e["prompt"].replace("\t", " ").replace("\n", " ")
@@ -116,6 +131,23 @@ N8N_MCP_CONFIG="$RESULTS_DIR/n8n-mcp.json"
 cat > "$N8N_MCP_CONFIG" << 'EOF'
 {"mcpServers":{"n8n-mcp":{"command":"npx","args":["-y","n8n-mcp"]}}}
 EOF
+
+# Plugin isolation (all conditions): user-scope INSTALLED plugins load from
+# $CLAUDE_CONFIG_DIR/plugins (installed_plugins.json) regardless of --settings,
+# so "enabledPlugins":{} above does NOT block them. On this machine that means
+# the n8n-local marketplace (symlinked to this live repo) plus hindsight-memory
+# inject context into every condition — proven contamination in run
+# 20260611-143327-v2 (mcp transcripts carried the plugin's KB injections).
+# A scratch config dir guarantees no user-scope plugins load in ANY condition;
+# the plugin condition re-adds this repo explicitly via --plugin-dir.
+# Auth is seeded by copying credential files by path (never printed). The dir
+# lives OUTSIDE the repo tree and is removed on exit so credential copies can
+# never be committed.
+EVAL_SCRATCH_CONFIG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/n8n-eval-claude-config.XXXXXX")
+[ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$EVAL_SCRATCH_CONFIG_DIR/.claude.json"
+[ -f "$HOME/.claude/.credentials.json" ] && cp "$HOME/.claude/.credentials.json" "$EVAL_SCRATCH_CONFIG_DIR/.credentials.json"
+export CLAUDE_CONFIG_DIR="$EVAL_SCRATCH_CONFIG_DIR"
+trap 'rm -rf "$EVAL_SCRATCH_CONFIG_DIR"' EXIT
 
 describe_condition_isolation() {
   local cond="$1"
@@ -324,7 +356,7 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
           --settings "$CLEAN_SETTINGS" \
           --strict-mcp-config --mcp-config "$EMPTY_MCP" \
           --disable-slash-commands \
-          --no-session-persistence \
+          ${SESSION_PERSIST_ARGS[@]+"${SESSION_PERSIST_ARGS[@]}"} \
           --dangerously-skip-permissions || cmd_rc=$?
       ;;
     plugin)
@@ -349,7 +381,7 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
         --plugin-dir "$REPO_DIR"
         --strict-mcp-config --mcp-config "$EMPTY_MCP"
         --disable-slash-commands
-        --no-session-persistence
+        ${SESSION_PERSIST_ARGS[@]+"${SESSION_PERSIST_ARGS[@]}"}
         --dangerously-skip-permissions
       )
       if [ "${#plugin_env[@]}" -gt 0 ]; then
@@ -367,7 +399,7 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
           --settings "$CLEAN_SETTINGS" \
           --strict-mcp-config --mcp-config "$N8N_MCP_CONFIG" \
           --disable-slash-commands \
-          --no-session-persistence \
+          ${SESSION_PERSIST_ARGS[@]+"${SESSION_PERSIST_ARGS[@]}"} \
           --dangerously-skip-permissions || cmd_rc=$?
       ;;
   esac
@@ -668,6 +700,40 @@ try:
             workflow_filename = os.path.basename(wf_files[-1])
     except Exception:
         pass
+    # Actual provider cost: Claude Code prices total_cost_usd at ANTHROPIC rates
+    # for the requested model name, even when ANTHROPIC_BASE_URL points at a
+    # different provider (~25x overstatement observed vs real DeepSeek billing).
+    # When the wrapper exports EVAL_COST_MODEL, reprice from token counts using
+    # the provider's published per-1M rates (cache miss = input + cache_creation,
+    # cache hit = cache_read; DeepSeek does not bill cache writes separately).
+    cost_model = '${EVAL_COST_MODEL:-}'
+    cost_actual = None
+    PROVIDER_RATES = {
+        # per 1M tokens: (input cache miss, input cache hit, output)
+        'deepseek-pro':   (0.435, 0.003625, 0.87),
+        'deepseek-flash': (0.14,  0.0028,   0.28),
+    }
+    if cost_model in PROVIDER_RATES:
+        miss_rate, hit_rate, out_rate = PROVIDER_RATES[cost_model]
+        cost_actual = (
+            (inp + cache_c) * miss_rate
+            + cache_r * hit_rate
+            + out_tok * out_rate
+        ) / 1_000_000
+    # In-session validator call count (plugin only): the PostToolUse hook tracks
+    # calls per session_id in a TMPDIR state file. Read it via the session_id
+    # in the response payload so the summary can report validator-budget usage.
+    validator_calls = None
+    try:
+        sid = d.get('session_id', '')
+        if sid:
+            state_path = os.path.join(
+                os.environ.get('TMPDIR', '/tmp'),
+                'n8n-knowledge-workflow-validation', sid + '.json')
+            if os.path.exists(state_path):
+                validator_calls = int(json.load(open(state_path)).get('calls', 0))
+    except Exception:
+        pass
     meta = {
         'condition': '$cond',
         'prompt_idx': ${fileidx:-$idx},
@@ -688,6 +754,9 @@ try:
         'autofix_fires': autofix_fires,
         'autofix_changes': autofix_changes,
         'workflow_filename': workflow_filename,
+        'validator_calls': validator_calls,
+        'cost_model': cost_model or None,
+        'cost_usd_actual': cost_actual,
     }
     with open('${outfile%.json}.meta.json', 'w') as f:
         json.dump(meta, f)
@@ -695,6 +764,31 @@ except Exception as e:
     with open('${outfile%.json}.meta.json', 'w') as f:
         json.dump({'condition':'$cond','prompt_idx':$idx,'run':$run,'time_ms':$elapsed,'error':str(e)}, f)
 " 2>/dev/null
+}
+
+# When transcripts are kept, move each session's transcript JSONL out of
+# <config dir>/projects/<project>/ and into the per-run folder so the full tool
+# call / hook / validator history lives next to the run's other artifacts.
+# Sessions write transcripts under CLAUDE_CONFIG_DIR (the scratch isolation dir
+# above), falling back to ~/.claude for runs without isolation. The transcript
+# MUST be rescued before the scratch dir's EXIT trap removes it.
+save_transcript() {
+  local outfile="$1"
+  [ "$KEEP_TRANSCRIPTS" = "1" ] || return 0
+  local sid
+  sid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('session_id',''))" "$outfile" 2>/dev/null) || return 0
+  [ -n "$sid" ] || return 0
+  local resolved_repo project_slug src
+  resolved_repo="$(cd "$REPO_DIR" && pwd)"
+  project_slug="$(printf '%s' "$resolved_repo" | tr '/.' '--')"
+  for config_root in "${CLAUDE_CONFIG_DIR:-}" "$HOME/.claude"; do
+    [ -n "$config_root" ] || continue
+    src="$config_root/projects/$project_slug/$sid.jsonl"
+    if [ -f "$src" ]; then
+      mv "$src" "${outfile%.json}.transcript.jsonl" 2>/dev/null || true
+      return 0
+    fi
+  done
 }
 
 run_one() {
@@ -721,6 +815,7 @@ sys.exit(0)
 
   local start_ms=$(python3 -c "import time; print(int(time.time()*1000))")
   invoke_model "$cond" "$prompt" "$outfile"
+  save_transcript "$outfile"
   repair_if_needed "$cond" "$prompt" "$outfile"
 
   local end_ms=$(python3 -c "import time; print(int(time.time()*1000))")

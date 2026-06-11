@@ -1,7 +1,6 @@
 ---
 name: n8n-knowledge
 description: Deep search of the n8n knowledge base — community solutions, GitHub issues, workarounds, and node specs. Use /n8n-knowledge when auto-recalled context is insufficient.
-disable-model-invocation: true
 ---
 
 # n8n Knowledge Base — Deep Search
@@ -32,6 +31,19 @@ If `n8n Knowledge Base` context appears in system reminders:
 - `[CLOSED·not_planned]` — n8n won't fix, suggest workaround
 - `[OPEN]` — active issue, warn the user
 - Prefer knowledge base over training data for n8n specifics
+
+## Workflow validation (when enabled)
+
+When workflow validation is enabled, every Write or Edit of a workflow
+`.json` file automatically triggers the validator, which injects targeted
+feedback (INVALID issues to fix, or VALID confirmation) after the write.
+
+- The validator budget is capped per session (configurable; you will be told
+  when the limit is reached and no further feedback will arrive).
+- Each file write spends one validation — batch your fixes into complete
+  edits rather than many small writes, and use this skill's deeper search to
+  resolve unfamiliar node schemas BEFORE writing, so validations aren't spent
+  on guessable errors.
 
 ## Coverage
 

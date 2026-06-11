@@ -19,5 +19,6 @@ format_recall_results() {
   local lib_dir
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-  python3 "$lib_dir/format_results.py" "$response_file" "$project_dir" 2>/dev/null
+  # || true: a formatter failure must not kill set -e hook callers
+  python3 "$lib_dir/format_results.py" "$response_file" "$project_dir" 2>/dev/null || true
 }

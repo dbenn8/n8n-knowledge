@@ -420,8 +420,15 @@ def resolve_source_facts(r, source_facts, limit=3):
 
 
 def format_results(response_file, project_dir=None):
-    with open(response_file) as f:
-        data = json.load(f)
+    # A timed-out/failed recall leaves an empty or non-JSON response file.
+    # That must degrade to "no results" — a raised exception here exits
+    # nonzero, and under `set -e` in auto-recall.sh it killed the ENTIRE
+    # hook output (recall AND build instructions).
+    try:
+        with open(response_file) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
 
     cfg = load_config(project_dir)
     results = data.get("results", [])

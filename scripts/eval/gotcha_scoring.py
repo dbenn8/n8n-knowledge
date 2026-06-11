@@ -141,33 +141,89 @@ def _extract_node_types(workflow: dict) -> set[str]:
     return types
 
 
-def _check_node_swap(workflow: dict, rule: dict) -> tuple[bool, str]:
+def _node_param_text(node: dict) -> str:
+    """Serialized node parameters for regex matching."""
+    try:
+        return json.dumps(node.get("parameters", {}), ensure_ascii=False)
+    except Exception:
+        return ""
+
+
+def _check_node_swap(workflow: dict, rule: dict, response_text: str = "") -> tuple[bool, str]:
     """Check that avoided nodes are absent and required nodes are present.
+
+    Param-aware extensions (added after the 2026-06-11 LLM rule review):
+    - require_node_param_regex {type -> regex}: a required node only counts
+      when its parameters match the regex (e.g. httpRequest must actually
+      target Supabase, a Code node must show real slicing/iteration).
+    - avoid_param_patterns [{node_type_pattern, param_regex}]: a node is
+      "buggy" only when its type matches AND its params match the regex
+      (e.g. Merge is unsafe only in positional combine; keyed merge is the
+      safe behavior the workaround recommends).
+    - warned_ok_terms (regex): buggy node present but the response explicitly
+      warns the user about the bug -> counts as addressed (matters when the
+      user explicitly asked for the buggy node, e.g. "use Loop Over Items").
 
     Returns (addressed, reason).
     """
     node_types = _extract_node_types(workflow)
+    nodes = workflow.get("nodes", [])
 
     avoid = rule.get("avoid_node_types", [])
     require = rule.get("require_node_types", [])
+    avoid_params = rule.get("avoid_param_patterns", [])
+    require_param_regex = rule.get("require_node_param_regex", {})
 
     avoided_found = [a for a in avoid if a in node_types]
-    required_found = [r for r in require if r in node_types]
 
-    avoid_ok = len(avoided_found) == 0 if avoid else True
+    param_violations = []
+    for ap in avoid_params:
+        patt = ap.get("node_type_pattern", "").lower()
+        rx = re.compile(ap.get("param_regex", ""), re.IGNORECASE)
+        for node in nodes:
+            if patt and patt not in node.get("type", "").lower():
+                continue
+            if rx.search(_node_param_text(node)):
+                param_violations.append(
+                    f"{node.get('name', node.get('type'))} matches /{ap.get('param_regex')}/"
+                )
+
+    required_found = []
+    for r in require:
+        rx_str = require_param_regex.get(r)
+        for node in nodes:
+            ntype = node.get("type", "")
+            if ntype != r and not (ntype.startswith("@n8n/") and ntype[5:] == r):
+                continue
+            if rx_str and not re.search(rx_str, _node_param_text(node), re.IGNORECASE):
+                continue
+            required_found.append(r)
+            break
+
+    avoid_ok = len(avoided_found) == 0 and len(param_violations) == 0
     require_ok = len(required_found) > 0 if require else True
 
     if avoid_ok and require_ok:
         parts = []
-        if avoid:
-            parts.append(f"correctly avoided {avoid}")
+        if avoid or avoid_params:
+            parts.append(f"correctly avoided {avoid or [ap.get('param_regex') for ap in avoid_params]}")
         if require:
             parts.append(f"used workaround {required_found}")
-        return True, "; ".join(parts)
+        return True, "; ".join(parts) or "no buggy pattern present"
+
+    # Escape hatch: the buggy node is present, but the user is explicitly
+    # warned about the bug in the response/notes.
+    warned_terms = rule.get("warned_ok_terms")
+    if not avoid_ok and warned_terms and response_text and re.search(
+        warned_terms, response_text, re.IGNORECASE
+    ):
+        return True, "buggy node present but user explicitly warned about the bug"
 
     parts = []
-    if not avoid_ok:
+    if avoided_found:
         parts.append(f"used buggy node(s) {avoided_found}")
+    if param_violations:
+        parts.append(f"unsafe params: {param_violations}")
     if not require_ok:
         parts.append(f"missing workaround node(s) {require}")
     return False, "; ".join(parts)
@@ -187,6 +243,32 @@ def _check_param(workflow: dict, rule: dict) -> tuple[bool, str]:
     for check in checks:
         pattern = check.get("node_type_pattern", "")
         check_name = check.get("check", "")
+
+        if check_name == "explicit_timezone_no_wait":
+            # Workflow-level check (not tied to one node): an explicit IANA
+            # timezone must be set (workflow settings or a Schedule Trigger
+            # node param) AND no Wait node may be present (issue #29160).
+            tz = (workflow.get("settings") or {}).get("timezone", "")
+            node_tz = [
+                n.get("parameters", {}).get("timezone", "")
+                for n in workflow.get("nodes", [])
+                if "scheduletrigger" in n.get("type", "").lower()
+            ]
+            tz_ok = bool(tz) or any(node_tz)
+            wait_nodes = [
+                n.get("name", "?") for n in workflow.get("nodes", [])
+                if n.get("type", "") == "n8n-nodes-base.wait"
+            ]
+            if tz_ok and not wait_nodes:
+                src = f"settings.timezone='{tz}'" if tz else f"scheduleTrigger timezone={[t for t in node_tz if t]}"
+                reasons.append(f"explicit timezone set ({src}); no Wait node")
+            else:
+                all_ok = False
+                if not tz_ok:
+                    reasons.append("no explicit timezone (settings.timezone or Schedule Trigger param)")
+                if wait_nodes:
+                    reasons.append(f"Wait node present {wait_nodes} (issue #29160 hazard)")
+            continue
 
         matching_nodes = [
             n for n in workflow.get("nodes", [])
@@ -229,7 +311,7 @@ def check_rule(workflow: dict, rule: dict, response_text: str = "") -> tuple[boo
     check_type = rule.get("check_type", "llm_only")
 
     if check_type == "node_swap":
-        addressed, reason = _check_node_swap(workflow, rule)
+        addressed, reason = _check_node_swap(workflow, rule, response_text)
         return addressed, reason, "deterministic"
 
     elif check_type == "param_check":
@@ -237,11 +319,16 @@ def check_rule(workflow: dict, rule: dict, response_text: str = "") -> tuple[boo
         return addressed, reason, "deterministic"
 
     elif check_type == "llm_only":
-        # Fall back to term-match heuristic using gotcha/workaround description
-        # Extract key terms from the gotcha and workaround text
-        gotcha_text = rule.get("gotcha", "")
-        workaround_text = rule.get("workaround", "")
-        key_terms = _extract_heuristic_terms(gotcha_text, workaround_text)
+        # Fall back to term-match heuristic. A rule may carry a curated
+        # "heuristic_terms" list (preferred — auto-extracted terms produced
+        # false positives, e.g. 'Get Row(s)' matching a mere operation label,
+        # and false negatives, e.g. rules whose gotcha text has no quoted
+        # strings extract zero terms and can never match).
+        key_terms = rule.get("heuristic_terms")
+        if not key_terms:
+            gotcha_text = rule.get("gotcha", "")
+            workaround_text = rule.get("workaround", "")
+            key_terms = _extract_heuristic_terms(gotcha_text, workaround_text)
         if key_terms and response_text:
             rx = re.compile("|".join(re.escape(t) for t in key_terms), re.IGNORECASE)
             if rx.search(response_text):

@@ -60,7 +60,8 @@ fi
 TMPFILE=$(mktemp)
 STRUCT_TMPFILE=$(mktemp)
 GOTCHA_TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"' EXIT
+GOTCHA_MULTI_DIR=$(mktemp -d)
+trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"; rm -rf "$GOTCHA_MULTI_DIR"' EXIT
 do_recall "$PROMPT" "low" > "$TMPFILE"
 
 # Check for node names in the prompt and do structured + gotcha recall if found
@@ -80,34 +81,71 @@ NODE_TYPE=$(echo "$NODE_DETECT" | sed -n '1p')
 NODE_TYPES=$(echo "$NODE_DETECT" | sed -n '2p')
 
 if [ -n "$NODE_TYPE" ]; then
-  # Run node-spec and gotcha recalls in parallel
+  # Run node-spec and gotcha recalls in parallel.
+  # Gotcha recall covers ALL detected node types (capped), not just the first:
+  # querying only the first detection missed the Merge row-loss gotcha when
+  # ZeroBounce happened to be detected first (eval prompt 122). Each curl has a
+  # hard max-time (recall_common.sh) and they run concurrently, so the cap
+  # bounds context size, not wall-clock time.
+  GOTCHA_NODE_CAP="${CLAUDE_PLUGIN_OPTION_GOTCHANODECAP:-3}"
   do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
-  do_gotcha_recall "$NODE_TYPE" > "$GOTCHA_TMPFILE" 2>/dev/null &
+  _gn=0
+  for _nt in $NODE_TYPES; do
+    [ "$_gn" -ge "$GOTCHA_NODE_CAP" ] && break
+    do_gotcha_recall "$_nt" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
+    _gn=$((_gn + 1))
+  done
   wait
 
-  # Merge: gotchas FIRST (highest priority), then semantic, then capped node specs
+  # Combine per-node gotcha results: round-robin across nodes (so the first
+  # detected node cannot crowd out the others), dedup, cap 5 total — same cap
+  # the single-node version had.
   python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        sem = json.load(f)
-    with open(sys.argv[2]) as f:
-        struct = json.load(f)
-    gotcha_results = []
+import glob, json, sys
+combined, seen = [], set()
+buckets = []
+for path in sorted(glob.glob(sys.argv[1] + '/*.json')):
     try:
-        with open(sys.argv[3]) as f:
-            gotcha = json.load(f)
-        gotcha_results = gotcha.get('results', [])[:5]
+        with open(path) as f:
+            buckets.append(json.load(f).get('results', []))
     except Exception:
         pass
-    struct_results = struct.get('results', [])[:5]
-    sem_results = sem.get('results', [])
-    # Order: gotchas (bugs/issues) → semantic (docs/community) → node specs (reference)
-    sem['results'] = gotcha_results + sem_results + struct_results
-    with open(sys.argv[1], 'w') as f:
-        json.dump(sem, f)
-except Exception:
-    pass
+i = 0
+while len(combined) < 5 and any(len(b) > i for b in buckets):
+    for b in buckets:
+        if i < len(b):
+            key = json.dumps(b[i], sort_keys=True)[:300]
+            if key not in seen:
+                seen.add(key)
+                combined.append(b[i])
+            if len(combined) >= 5:
+                break
+    i += 1
+json.dump({'results': combined}, open(sys.argv[2], 'w'))
+" "$GOTCHA_MULTI_DIR" "$GOTCHA_TMPFILE" 2>/dev/null || true
+
+  # Merge: gotchas FIRST (highest priority), then semantic, then capped node specs.
+  # Every stream is loaded independently — a timed-out semantic recall must NOT
+  # discard the gotcha/spec results (the old all-or-nothing try block did
+  # exactly that whenever the semantic call failed under endpoint load).
+  python3 -c "
+import json, sys
+
+def load_results(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+sem = load_results(sys.argv[1])
+struct_results = load_results(sys.argv[2]).get('results', [])[:5]
+gotcha_results = load_results(sys.argv[3]).get('results', [])[:5]
+sem_results = sem.get('results', [])
+# Order: gotchas (bugs/issues) → semantic (docs/community) → node specs (reference)
+sem['results'] = gotcha_results + sem_results + struct_results
+with open(sys.argv[1], 'w') as f:
+    json.dump(sem, f)
 " "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE" 2>/dev/null || true
 fi
 

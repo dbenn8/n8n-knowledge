@@ -77,6 +77,19 @@ def main() -> int:
         autofix_fired = sum(1 for m in all_runs if (m.get("autofix_fires") or 0) > 0)
         autofix_vals = all_vals("autofix_changes")
         avg_autofix = sum(autofix_vals) / max(len(autofix_vals), 1)
+        validator_vals = [
+            m["validator_calls"] for m in all_runs
+            if isinstance(m.get("validator_calls"), (int, float))
+        ]
+        avg_validator_calls = (
+            sum(validator_vals) / len(validator_vals) if validator_vals else None
+        )
+        actual_vals = [
+            m["cost_usd_actual"] for m in all_runs
+            if isinstance(m.get("cost_usd_actual"), (int, float))
+        ]
+        avg_cost_actual = sum(actual_vals) / len(actual_vals) if actual_vals else None
+        total_cost_actual = sum(actual_vals) if actual_vals else None
 
         g = gotcha_scores.get(cond) or {}
         gotcha_addr = g.get("addressed", 0)
@@ -97,6 +110,9 @@ def main() -> int:
             "wrote_file_runs": wrote,
             "autofix_runs": autofix_fired,
             "autofix_changes": avg_autofix,
+            "validator_calls": avg_validator_calls,
+            "cost_usd_actual": avg_cost_actual,
+            "total_cost_actual": total_cost_actual,
             "gotcha_addressed_frac": f"{gotcha_addr}/{gotcha_scored}",
             "gotcha_rate": gotcha_rate,
             "total_runs": total,
@@ -134,6 +150,7 @@ def main() -> int:
         ("Validated runs", "validated_runs", None, False),
         ("Invalid runs", "invalid_runs", None, False),
         ("Avg cost ($)", "cost_usd", "pct", True),
+        ("Avg cost actual ($)", "cost_usd_actual", "pct", True),
         ("Avg time (ms)", "time_ms", "pct", True),
         ("Avg turns", "num_turns", "pct", True),
         ("Avg total input tok", "total_input_tokens", "pct", True),
@@ -143,6 +160,7 @@ def main() -> int:
         ("Wrote-file runs", "wrote_file_runs", None, False),
         ("Autofix runs", "autofix_runs", None, False),
         ("Avg autofix fixes", "autofix_changes", None, False),
+        ("Avg validator calls", "validator_calls", None, False),
         ("Gotcha-addressed", "gotcha_addressed_frac", None, False),
         ("Gotcha-addr rate", "gotcha_rate", "pp", False),
     ]
@@ -159,7 +177,13 @@ def main() -> int:
                 if isinstance(raw, (int, float)) and isinstance(mcp_val, (int, float)):
                     delta = _delta_str(raw, mcp_val, delta_mode, lower_better)
 
-            if key == "validated_rate":
+            if key == "cost_usd_actual":
+                if raw is None:
+                    cell = f"{'—':>14}"
+                    delta = ""
+                else:
+                    cell = f"${raw:>13.4f}"
+            elif key == "validated_rate":
                 cell = f"{raw:>13.1f}%"
             elif key == "is_error":
                 cell = f"{raw:>13.1f}%"
@@ -171,6 +195,8 @@ def main() -> int:
                 cell = f"${raw:>13.3f}"
             elif key == "time_ms":
                 cell = f"{raw:>12.0f}ms"
+            elif key == "validator_calls":
+                cell = f"{'—':>14}" if raw is None else f"{raw:>14.1f}"
             elif key in ("validated_runs", "invalid_runs", "wrote_file_runs", "autofix_runs"):
                 cell = f"{raw:>14}"
             else:
@@ -198,6 +224,24 @@ def main() -> int:
         cell = f"${v:>13.2f}" + delta
         print(f" {cell:>{col_width}}", end="")
     print()
+
+    # Total actual provider cost (present when runs carry cost_usd_actual,
+    # i.e. the backend wrapper exported EVAL_COST_MODEL for repricing)
+    if any(computed[c]["total_cost_actual"] is not None for c in conditions):
+        print(f"{'Total cost actual ($)':<25}", end="")
+        for cond in conditions:
+            v = computed[cond]["total_cost_actual"]
+            if v is None:
+                cell = f"{'—':>14}"
+            else:
+                delta = ""
+                if has_both and cond == "plugin" and "mcp" in computed:
+                    mv = computed["mcp"]["total_cost_actual"]
+                    if mv is not None:
+                        delta = _delta_str(v, mv, "pct", True)
+                cell = f"${v:>13.2f}" + delta
+            print(f" {cell:>{col_width}}", end="")
+        print()
 
     print(f"\nResults: {results_dir}")
     return 0

@@ -30,6 +30,11 @@ do_gotcha_recall() {
   local query_escaped
   query_escaped=$(printf '%s node bug issue workaround error' "$service" | recall_json_escape)
 
-  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 2000, "tags": ["source:github", "node:%s"], "tags_match": "any"}' \
-    "$query_escaped" "$node_type")"
+  # NO tag filter: github memories are not tagged node:<type>, so
+  # ["source:github","node:X"] with tags_match=any degenerated to "the whole
+  # github corpus" and drowned the node-specific signal (merge queries returned
+  # Facebook/Salesforce error-output noise). Pure semantic ranking on the
+  # node-name query returns the actual node's known issues.
+  recall_post "$(printf '{"query": %s, "budget": "low", "max_tokens": 2000}' \
+    "$query_escaped")"
 }

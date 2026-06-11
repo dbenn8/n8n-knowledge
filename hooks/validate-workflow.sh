@@ -52,7 +52,7 @@ if calls >= cap:
 state["calls"] = calls + 1
 with open(path, "w") as f:
     json.dump(state, f)
-print("fire")
+print(f"fire {calls + 1}")
 PYEOF
 ) || exit 0
   if [ "$SHOULD_VALIDATE" = "cap_reached" ]; then
@@ -60,8 +60,11 @@ PYEOF
     echo "$CAP_CTX"
     exit 0
   fi
-  [ "$SHOULD_VALIDATE" = "fire" ] || exit 0
+  CALLS_USED="${SHOULD_VALIDATE#fire }"
+  [ "${SHOULD_VALIDATE%% *}" = "fire" ] || exit 0
 fi
+# Validator budget counter shown to the model (session-tracked when SID present).
+CALLS_USED="${CALLS_USED:-1}"
 
 WORKFLOW_TMP=$(mktemp)
 trap 'rm -f "$WORKFLOW_TMP"' EXIT
@@ -105,7 +108,7 @@ if [ "$VALID" = "false" ]; then
 fi
 
 if [ "$VALID" = "true" ]; then
-  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" python3 - 2>/dev/null << 'PYEOF'
+  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" CALLS_USED="$CALLS_USED" CAP="$CAP" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -116,11 +119,14 @@ mode = result.get("validator_mode") or "unknown"
 node_count = result.get("node_count", 0)
 trigger_count = result.get("trigger_count", 0)
 auto_changes = autofix.get("changes") or []
+calls_used = os.environ.get("CALLS_USED", "?")
+cap = os.environ.get("CAP", "?")
 
 header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
+    f"Validator budget: {calls_used} of {cap} calls used this session.",
     f"Validation passed. Nodes: {node_count}. Trigger nodes: {trigger_count}.",
 ]
 if auto_changes:
@@ -206,7 +212,7 @@ if db_types:
 PYEOF
 )
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" python3 - 2>/dev/null << 'PYEOF'
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -218,6 +224,12 @@ feedback = result.get("feedback_block", "").strip()
 issues = result.get("issues_block", "").strip()
 auto_changes = autofix.get("changes") or []
 node_specs = os.environ.get("NODE_SPECS", "").strip()
+calls_used = os.environ.get("CALLS_USED", "?")
+cap = os.environ.get("CAP", "?")
+try:
+    remaining = max(0, int(cap) - int(calls_used))
+except ValueError:
+    remaining = "?"
 if not feedback:
     raise SystemExit(1)
 
@@ -225,6 +237,8 @@ header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
+    f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). "
+    "Batch ALL fixes below into one complete re-write — each file write spends one validation.",
 ]
 if auto_changes:
     body.extend([

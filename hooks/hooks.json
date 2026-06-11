@@ -2,10 +2,10 @@
   "version": 1,
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-recall.sh\"", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-recall.sh\"", "timeout": 20 } ] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/backstop-recall.sh\"", "timeout": 8 } ] },
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/backstop-recall.sh\"", "timeout": 12 } ] },
       { "matcher": "*", "hooks": [ { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/validate-workflow.sh\"", "timeout": 12 } ] }
     ],
     "PreToolUse": [

@@ -82,6 +82,27 @@ async function validate(workflow) {
     distRoot,
     "services/enhanced-config-validator"
   ));
+  const { ConfigValidator } = require(path.join(
+    distRoot,
+    "services/config-validator"
+  ));
+  const { isExpression } = require(path.join(
+    distRoot,
+    "utils/expression-utils"
+  ));
+
+  // Monkey-patch: skip options validation for properties with empty options arrays
+  // (dynamically loaded via loadOptionsMethod) or expression values
+  const origValidatePropertyTypes = ConfigValidator.validatePropertyTypes;
+  ConfigValidator.validatePropertyTypes = function (properties, config, errors) {
+    const filteredProperties = properties.filter(function (prop) {
+      if (prop && prop.type === "options" && prop.options && Array.isArray(prop.options) && prop.options.length === 0) {
+        return false;
+      }
+      return true;
+    });
+    origValidatePropertyTypes.call(this, filteredProperties, config, errors);
+  };
 
   const storage = new SQLiteStorageService(dbPath);
   const repo = new NodeRepository(storage);
