@@ -25,6 +25,15 @@ case "$FILE_PATH" in
   *) exit 0 ;;
 esac
 
+# Surgical-edit draft marker: a file whose first line is the literal !!DRAFT!!
+# is a work-in-progress draft (the model is mid-surgical-edit via Bash). Skip
+# silently — no validation, no budget charge. The model deletes the marker via
+# the Edit tool when done; THAT Edit triggers validation of the final state.
+DRAFT_MARKER='!!DRAFT!!'
+case "$(head -c 9 "$FILE_PATH" 2>/dev/null)" in
+  "$DRAFT_MARKER") exit 0 ;;
+esac
+
 CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
 STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
