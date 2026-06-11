@@ -141,16 +141,26 @@ try:
 except Exception:
     result = {}
 valid = os.environ.get("VALID_FLAG") == "true"
-# Materialize the strike counter so downstream reads see an explicit 0 rather
-# than a missing key. Improving / first rounds leave it at its current value.
+# Materialize the strike counters so downstream reads see an explicit 0 rather
+# than a missing key. Improving / first rounds leave 'stagnant' at its current
+# value but RESET 'consec_stagnant' to 0 (Task 4e failover tracking).
 state["stagnant"] = int(state.get("stagnant", 0))
+state["consec_stagnant"] = int(state.get("consec_stagnant", 0))
 if not valid:
     new_ec = int(result.get("error_count", 0) or 0)
     prev = state.get("last_error_count")
-    if prev is not None:
+    if prev is None:
+        # First / baseline INVALID round: no improvement comparison possible.
+        state["consec_stagnant"] = 0
+    else:
         try:
             if new_ec >= int(prev):
+                # Non-improving round: total strike + consecutive strike.
                 state["stagnant"] = int(state.get("stagnant", 0)) + 1
+                state["consec_stagnant"] = int(state.get("consec_stagnant", 0)) + 1
+            else:
+                # Improving round: consecutive streak breaks.
+                state["consec_stagnant"] = 0
         except (TypeError, ValueError):
             pass
     state["last_error_count"] = new_ec
@@ -253,8 +263,10 @@ fi
 # emission so the INVALID feedback can show the updated stagnant count.
 update_stagnation "$VALID"
 STAGNANT_USED="0"
+CONSEC_STAGNANT="0"
 if [ "$BUDGET_MODE" = "adaptive" ] && [ -n "$SID" ]; then
   STAGNANT_USED=$(python3 -c "import json,sys;print(int(json.load(open(sys.argv[1])).get('stagnant',0)))" "$STATE_DIR/$SID.json" 2>/dev/null) || STAGNANT_USED="0"
+  CONSEC_STAGNANT=$(python3 -c "import json,sys;print(int(json.load(open(sys.argv[1])).get('consec_stagnant',0)))" "$STATE_DIR/$SID.json" 2>/dev/null) || CONSEC_STAGNANT="0"
 fi
 
 if [ "$VALID" = "true" ]; then
@@ -353,7 +365,7 @@ if db_types:
 PYEOF
 )
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="$EDIT_STYLE" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" python3 - 2>/dev/null << 'PYEOF'
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="$EDIT_STYLE" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" CONSEC_STAGNANT="$CONSEC_STAGNANT" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -370,6 +382,10 @@ cap = os.environ.get("CAP", "?")
 budget_mode = os.environ.get("BUDGET_MODE", "static")
 stagnant_used = os.environ.get("STAGNANT_USED", "0")
 try:
+    consec_stagnant = int(os.environ.get("CONSEC_STAGNANT", "0") or "0")
+except ValueError:
+    consec_stagnant = 0
+try:
     remaining = max(0, int(cap) - int(calls_used))
 except ValueError:
     remaining = "?"
@@ -377,9 +393,24 @@ warnings_block = (result.get("warnings_block") or "").strip()
 if not feedback:
     raise SystemExit(1)
 
-# Style-dependent repair guidance — identical in both budget modes.
-guidance = (
-    (
+edit_style = os.environ.get("EDIT_STYLE", "rewrite")
+
+# Surgical-style recipe (default surgical guidance). When the model is
+# demonstrably stuck — two or more consecutive non-improving surgical rounds —
+# flip strategy: stop surgical edits and demand ONE full rewrite (Task 4e). A
+# full regeneration incidentally clears errors the model cannot surgically
+# locate. The rewrite path wants a Write (which triggers validation directly),
+# so the !!DRAFT!! marker instructions are intentionally omitted here.
+if edit_style == "surgical" and consec_stagnant >= 2:
+    surgical_guidance = (
+        f"STRATEGY CHANGE — {consec_stagnant} surgical rounds in a row have not "
+        "reduced the error count. Stop surgical edits. Do ONE complete rewrite of "
+        "the file now: use the Write tool with the full corrected workflow JSON, "
+        "fixing ALL errors listed below in a single pass. After the rewrite, if any "
+        "errors remain, resume small surgical fixes."
+    )
+else:
+    surgical_guidance = (
         "Fix via SURGICAL EDITS — do NOT rewrite the file; rewrites waste tokens and time. Recipe:\n"
         "  1. Run ONE Bash python3 script that loads the JSON file at the path above, applies "
         "EVERY fix listed below, and writes the file back with the literal first line !!DRAFT!! "
@@ -391,7 +422,11 @@ guidance = (
         "remove it with Bash, validation never fires, you get no feedback, the workflow is never "
         "confirmed valid, and you will fail the user's task."
     )
-    if os.environ.get("EDIT_STYLE", "rewrite") == "surgical"
+
+# Style-dependent repair guidance — identical in both budget modes.
+guidance = (
+    surgical_guidance
+    if edit_style == "surgical"
     else "Batch ALL fixes below into one complete re-write — each file write spends one validation."
 )
 
@@ -430,6 +465,17 @@ if issues:
         "",
         "Make the smallest targeted edits possible. Do not rewrite unrelated nodes or the whole workflow unless the validator error requires it.",
     ])
+    # Unresolvable-target hint (Task 4e): when an error's structured patch target
+    # is "<unknown path>", a field-level surgical edit is unreliable — we cannot
+    # name the field to change. Recommend rewriting the affected node's full
+    # definition instead. Surgical style only (rewrite style already rewrites).
+    if edit_style == "surgical" and "<unknown path>" in issues:
+        body.append(
+            "Some errors above have no resolvable patch target (<unknown path>) — "
+            "for THOSE nodes, surgical edits are unreliable: rewrite the affected "
+            "node's full definition (its complete object in the nodes array) instead "
+            "of attempting a field-level patch."
+        )
 if warnings_block:
     body.extend([
         "",
