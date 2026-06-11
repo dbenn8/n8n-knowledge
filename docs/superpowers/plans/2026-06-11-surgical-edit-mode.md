@@ -417,6 +417,7 @@ git push -u origin surgical-edits
 - **Prompts (9):** small = indices `0, 3, 6` (single-node group A — Slack post, Notion page, Jira issue); medium = `66, 70, 76` (from today's mid-13 set; 76 was a DeepSeek-mcp failure); complex = `79, 85, 94` (85 is the 2,695s/172k-token rewrite pathology — the headline test case; 94 failed mcp on both models).
 - **Arms (2):** identical settings except `EVAL_PLUGIN_WORKFLOW_EDIT_STYLE=surgical` vs unset (rewrite). Condition: `plugin` only — this is plugin-vs-plugin, mcp adds nothing here.
 - **Models:** Sonnet first (18 sessions). DeepSeek as a follow-up adherence check if Sonnet looks good (the recipe's Edit-not-Bash marker removal is the instruction-following risk for weaker models).
+- **MCP harness-regression sanity (cheap insurance, runs in parallel):** because Task 4 edits the shared harness (`run-eval-v2.sh`), run a 3-prompt mcp-only arm on BOTH models — indices `0, 3, 6`, `--conditions mcp`, otherwise identical settings, NO edit-style env var. This is pass/fail only (mcp sessions launch, complete, and validate like the existing baselines — 0/3 errors), NOT a benchmark; existing mcp numbers stay the reference. Cost ≈ $3 Sonnet quota + pennies of DeepSeek API. If any mcp session errors, stop and diagnose the harness before any further runs.
 - **Command shape** (run from the WORKTREE root so the worktree's hooks are exercised):
 
 ```bash
@@ -437,8 +438,8 @@ bash scripts/eval/run-eval-v2.sh --conditions plugin --runs 1 \
 - **Monitoring:** 5-minute cadence with full stats tables in message text, % diffs on every comparative row, median+mean time.
 
 - [ ] Step 1: Present design + verbatim settings to Dan; wait for explicit approval
-- [ ] Step 2: Launch rewrite arm, then surgical arm (or both interleaved — confirm with Dan)
-- [ ] Step 3: Compare per the success criteria; read transcripts of all complex-prompt surgical runs
+- [ ] Step 2: Launch rewrite arm, then surgical arm (or both interleaved — confirm with Dan); launch the 3-prompt mcp sanity arms (both models) in parallel
+- [ ] Step 3: Compare per the success criteria; read transcripts of all complex-prompt surgical runs; confirm mcp sanity arms completed 0/3 errors
 - [ ] Step 4: Report verdict + recommendation (adopt for full A+B+C, iterate wording, or drop)
 
 ---
