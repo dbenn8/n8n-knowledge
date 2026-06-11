@@ -374,3 +374,43 @@ def test_raw_fact_render_never_redacted_even_with_names():
     source_facts = {"f1": _fact("Chrisyk")}
     block = render_result(1, r, "HIGH", False, [], _CFG, source_facts)
     assert "Chrisyk" in block
+
+
+def test_format_results_end_to_end_redacts_via_threaded_source_facts(tmp_path):
+    """Review gap 5: drive the PRODUCTION path — format_results() must thread
+    the response-level source_facts into render_result so observation prose is
+    redacted without any caller plumbing."""
+    from format_results import format_results
+    import json
+
+    payload = {
+        "results": [
+            {
+                "id": "obs-1",
+                "type": "observation",
+                "text": "user Chrisyk resolved the merge issue by re-running the trigger",
+                "tags": [],
+                "metadata": None,
+                "source_fact_ids": ["sf-1"],
+            }
+        ],
+        "source_facts": {
+            "sf-1": {
+                "id": "sf-1",
+                "text": "original post",
+                "metadata": {
+                    "url": "https://community.n8n.io/t/merge-issue/123",
+                    "username": "Chrisyk",
+                    "views": 900,
+                    "like_count": 12,
+                    "has_accepted_answer": True,
+                },
+            }
+        },
+    }
+    f = tmp_path / "resp.json"
+    f.write_text(json.dumps(payload))
+    ctx = format_results(str(f), "") or ""
+    assert "Chrisyk" not in ctx.split("https://")[0]  # prose redacted
+    assert "a community user resolved" in ctx
+    assert "https://community.n8n.io/t/merge-issue/123" in ctx  # citation intact
