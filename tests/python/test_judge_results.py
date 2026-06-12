@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -252,3 +253,47 @@ class TestBuildPrompt:
         p = jr.build_prompt(_ji(gotcha=RULES[0]))
         assert '"gotcha_handled": "pass" or "fail"' in p
         assert "not_applicable" not in p
+
+
+class TestIsolation:
+    def test_scratch_config_layout(self, tmp_path):
+        creds = tmp_path / ".credentials.json"
+        creds.write_text('{"claudeAiOauth": {}}')
+        cfg = jr.make_scratch_config(creds_source=str(creds))
+        try:
+            mode = os.stat(cfg).st_mode & 0o777
+            assert mode == 0o700
+            settings = json.loads(open(os.path.join(cfg, "settings.json")).read())
+            assert settings == {}  # clean: no plugins, no hooks
+            mcp = json.loads(open(os.path.join(cfg, "empty-mcp.json")).read())
+            assert mcp == {"mcpServers": {}}
+            link = os.path.join(cfg, ".credentials.json")
+            assert os.path.islink(link), "credentials MUST be a symlink, never a copy"
+            assert os.path.realpath(link) == os.path.realpath(str(creds))
+        finally:
+            jr.cleanup_scratch_config(cfg)
+        assert not os.path.exists(cfg)
+
+    def test_cleanup_never_follows_symlink(self, tmp_path):
+        creds = tmp_path / ".credentials.json"
+        creds.write_text("SECRET")
+        cfg = jr.make_scratch_config(creds_source=str(creds))
+        jr.cleanup_scratch_config(cfg)
+        assert creds.read_text() == "SECRET"  # the real file survives cleanup
+
+    def test_build_cmd_isolation_flags(self, tmp_path):
+        creds = tmp_path / ".credentials.json"
+        creds.write_text("{}")
+        cfg = jr.make_scratch_config(creds_source=str(creds))
+        try:
+            cmd, env = jr.build_cmd("opus", cfg)
+            assert cmd[:3] == ["claude", "-p", "--model"]
+            assert "opus" in cmd
+            assert "--strict-mcp-config" in cmd
+            i = cmd.index("--mcp-config")
+            assert cmd[i + 1] == os.path.join(cfg, "empty-mcp.json")
+            j = cmd.index("--settings")
+            assert cmd[j + 1] == os.path.join(cfg, "settings.json")
+            assert env["CLAUDE_CONFIG_DIR"] == cfg
+        finally:
+            jr.cleanup_scratch_config(cfg)

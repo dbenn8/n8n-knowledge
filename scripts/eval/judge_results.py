@@ -281,3 +281,73 @@ def build_prompt(ji: JudgeInput) -> str:
         "{\n  " + ",\n  ".join(schema_lines) + "\n}"
     )
     return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Isolated scratch config (no plugins/hooks/MCP; credentials SYMLINKED)
+# ---------------------------------------------------------------------------
+
+def make_scratch_config(creds_source: str | None = None) -> str:
+    """Create an isolated CLAUDE_CONFIG_DIR for judge sessions.
+
+    - mktemp dir (0700): a hard kill orphans at most a dangling symlink,
+      never credential bytes.
+    - settings.json {} : no plugins, no hooks.
+    - empty-mcp.json   : no MCP servers (used with --strict-mcp-config).
+    - .credentials.json: SYMLINK to the live file so token rotation is always
+      visible (a cp went stale mid-run and 401'd an entire eval arm, 2026-06-12).
+    """
+    if creds_source is None:
+        creds_source = os.path.expanduser("~/.claude/.credentials.json")
+    cfg = tempfile.mkdtemp(prefix="judge-config-")
+    os.chmod(cfg, 0o700)
+    with open(os.path.join(cfg, "settings.json"), "w") as f:
+        json.dump({}, f)
+    with open(os.path.join(cfg, "empty-mcp.json"), "w") as f:
+        json.dump({"mcpServers": {}}, f)
+    if os.path.exists(creds_source):
+        os.symlink(os.path.realpath(creds_source),
+                   os.path.join(cfg, ".credentials.json"))
+    return cfg
+
+
+def cleanup_scratch_config(cfg: str) -> None:
+    """Remove the scratch dir without ever following the credentials symlink."""
+    for name in os.listdir(cfg):
+        p = os.path.join(cfg, name)
+        if os.path.islink(p) or os.path.isfile(p):
+            os.unlink(p)
+    os.rmdir(cfg)
+
+
+def build_cmd(model: str, config_dir: str) -> tuple[list[str], dict]:
+    cmd = [
+        "claude", "-p", "--model", model,
+        "--strict-mcp-config",
+        "--mcp-config", os.path.join(config_dir, "empty-mcp.json"),
+        "--settings", os.path.join(config_dir, "settings.json"),
+    ]
+    env = dict(os.environ)
+    env["CLAUDE_CONFIG_DIR"] = config_dir
+    return cmd, env
+
+
+def run_claude(prompt: str, model: str, config_dir: str) -> str:
+    """Real runner: one judge call. Raises AuthError on 401-family failures,
+    retries rate-limit/transient errors with backoff."""
+    cmd, env = build_cmd(model, config_dir)
+    last_err = ""
+    for attempt in range(RATE_LIMIT_RETRIES):
+        proc = subprocess.run(cmd, input=prompt, capture_output=True,
+                              text=True, env=env, timeout=600)
+        if proc.returncode == 0:
+            return proc.stdout
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        if AUTH_ERROR_RE.search(combined):
+            raise AuthError(combined.strip()[:300])
+        last_err = combined.strip()[:300]
+        if RATE_LIMIT_RE.search(combined) and attempt < RATE_LIMIT_RETRIES - 1:
+            time.sleep(RATE_LIMIT_BACKOFFS[attempt])
+            continue
+        break
+    raise RuntimeError(f"claude call failed: {last_err}")
