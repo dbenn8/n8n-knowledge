@@ -297,3 +297,71 @@ class TestIsolation:
             assert env["CLAUDE_CONFIG_DIR"] == cfg
         finally:
             jr.cleanup_scratch_config(cfg)
+
+
+class TestRunClaude:
+    @staticmethod
+    def _proc(rc, out="", err=""):
+        class P:
+            returncode = rc
+            stdout = out
+            stderr = err
+        return P()
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self, monkeypatch):
+        monkeypatch.setattr(jr.time, "sleep", lambda s: None)
+
+    def test_timeout_is_transient_then_succeeds(self, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise jr.subprocess.TimeoutExpired(cmd, 600)
+            return self._proc(0, out='{"ok": true}')
+        monkeypatch.setattr(jr.subprocess, "run", fake_run)
+        assert jr.run_claude("p", "opus", "/tmp/cfg") == '{"ok": true}'
+        assert len(calls) == 2
+
+    def test_timeout_exhausted_raises_runtime_error(self, monkeypatch):
+        def fake_run(cmd, **kw):
+            raise jr.subprocess.TimeoutExpired(cmd, 600)
+        monkeypatch.setattr(jr.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError, match="timed out"):
+            jr.run_claude("p", "opus", "/tmp/cfg")
+
+    def test_long_stdout_auth_vocabulary_is_not_auth_error(self, monkeypatch):
+        verdicty = ("the workflow handles authentication via OAuth and the user "
+                    "is logged in before the Slack node fires. " * 20)
+        def fake_run(cmd, **kw):
+            return self._proc(1, out=verdicty, err="transient failure")
+        monkeypatch.setattr(jr.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError):
+            jr.run_claude("p", "opus", "/tmp/cfg")  # RuntimeError, NOT AuthError
+
+    def test_stderr_401_raises_auth_error(self, monkeypatch):
+        def fake_run(cmd, **kw):
+            return self._proc(1, out="", err="API error: 401 unauthorized")
+        monkeypatch.setattr(jr.subprocess, "run", fake_run)
+        with pytest.raises(jr.AuthError):
+            jr.run_claude("p", "opus", "/tmp/cfg")
+
+    def test_short_stdout_login_message_raises_auth_error(self, monkeypatch):
+        def fake_run(cmd, **kw):
+            return self._proc(1, out="Please run /login", err="")
+        monkeypatch.setattr(jr.subprocess, "run", fake_run)
+        with pytest.raises(jr.AuthError):
+            jr.run_claude("p", "opus", "/tmp/cfg")
+
+    def test_rate_limit_retries_then_succeeds(self, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(1)
+            if len(calls) < 3:
+                return self._proc(1, err="429 rate limit exceeded")
+            return self._proc(0, out="verdict")
+        monkeypatch.setattr(jr.subprocess, "run", fake_run)
+        assert jr.run_claude("p", "opus", "/tmp/cfg") == "verdict"
+        assert len(calls) == 3

@@ -333,20 +333,36 @@ def build_cmd(model: str, config_dir: str) -> tuple[list[str], dict]:
 
 
 def run_claude(prompt: str, model: str, config_dir: str) -> str:
-    """Real runner: one judge call. Raises AuthError on 401-family failures,
-    retries rate-limit/transient errors with backoff."""
+    """Real runner: one judge call.
+
+    Raises AuthError on 401-family failures — detected on stderr, or on a
+    SHORT stdout error envelope (a verdict-bearing stdout is long, and may
+    legitimately discuss authentication). Retries rate-limit errors and
+    timeouts with backoff; other failures raise RuntimeError.
+    """
     cmd, env = build_cmd(model, config_dir)
     last_err = ""
     for attempt in range(RATE_LIMIT_RETRIES):
-        proc = subprocess.run(cmd, input=prompt, capture_output=True,
-                              text=True, env=env, timeout=600)
+        try:
+            proc = subprocess.run(cmd, input=prompt, capture_output=True,
+                                  text=True, env=env, timeout=600)
+        except subprocess.TimeoutExpired:
+            last_err = "timed out after 600s"
+            if attempt < RATE_LIMIT_RETRIES - 1:
+                time.sleep(RATE_LIMIT_BACKOFFS[attempt])
+                continue
+            break
         if proc.returncode == 0:
             return proc.stdout
-        combined = (proc.stdout or "") + (proc.stderr or "")
-        if AUTH_ERROR_RE.search(combined):
-            raise AuthError(combined.strip()[:300])
-        last_err = combined.strip()[:300]
-        if RATE_LIMIT_RE.search(combined) and attempt < RATE_LIMIT_RETRIES - 1:
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        auth_surface = stderr
+        if len(stdout.strip()) < 500:
+            auth_surface += "\n" + stdout
+        if AUTH_ERROR_RE.search(auth_surface):
+            raise AuthError(auth_surface.strip()[:300])
+        last_err = (stdout + stderr).strip()[:300]
+        if RATE_LIMIT_RE.search(stdout + stderr) and attempt < RATE_LIMIT_RETRIES - 1:
             time.sleep(RATE_LIMIT_BACKOFFS[attempt])
             continue
         break
