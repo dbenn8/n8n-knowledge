@@ -384,14 +384,21 @@ def _stamp(v: dict, ji: JudgeInput, model: str) -> dict:
     return v
 
 
+def _crit_key(s: str) -> str:
+    """Normalize criterion text for matching (judge echo may drift in case/whitespace)."""
+    return " ".join(s.split()).casefold()
+
+
 def rollup_checklist(verdict: dict, criteria: dict) -> dict:
-    """Recompute intent_fit from the judge's per-criterion calls.
+    """Recompute intent_fit from the judge's per-criterion calls (mutates in place).
 
     We trust the judge on each criterion but never on the roll-up:
     pass iff every 'must' criterion is met. 'nice' items are informational.
+    Keying is normalized (case/whitespace); unknown criteria are ignored and
+    missing ones default to unmet (fail-closed).
     """
-    met = {c["criterion"]: c["met"] for c in verdict.get("criteria", [])}
-    verdict["intent_fit"] = "pass" if all(met.get(m, False) for m in criteria.get("must", [])) else "fail"
+    met = {_crit_key(c["criterion"]): c["met"] for c in verdict.get("criteria", [])}
+    verdict["intent_fit"] = "pass" if all(met.get(_crit_key(m), False) for m in criteria.get("must", [])) else "fail"
     return verdict
 
 
@@ -430,3 +437,89 @@ def judge_one(ji: JudgeInput, runner, model: str = DEFAULT_MODEL) -> dict:
             verdict = rollup_checklist(verdict, ji.criteria)
         return _stamp(verdict, ji, model)
     raise VerdictParseError(f"retries exhausted: {last_error}")
+
+
+# ---------------------------------------------------------------------------
+# Pass runner (concurrency, cache, 401 halt) + auth preflight
+# ---------------------------------------------------------------------------
+
+def preflight_ok(creds_path: str, n_calls: int, concurrency: int,
+                 assume_yes: bool, now_s: float | None = None,
+                 confirm=None) -> bool:
+    """Warn (and optionally abort) if the OAuth token expires mid-pass."""
+    if now_s is None:
+        now_s = time.time()
+    if confirm is None:
+        confirm = lambda msg: input(msg + " [y/N] ").strip().lower() == "y"
+    try:
+        with open(creds_path) as f:
+            expires_ms = json.load(f)["claudeAiOauth"]["expiresAt"]
+    except (OSError, KeyError, json.JSONDecodeError, TypeError):
+        print("WARNING: could not read credentials expiry - proceeding.", file=sys.stderr)
+        return True
+    est_s = (n_calls / max(concurrency, 1)) * SECONDS_PER_CALL_ESTIMATE
+    remaining_s = expires_ms / 1000 - now_s
+    if remaining_s > est_s:
+        return True
+    msg = (f"WARNING: OAuth token expires in {int(remaining_s)}s but the pass "
+           f"is estimated at {int(est_s)}s. Run /login first, or proceed anyway?")
+    print(msg, file=sys.stderr)
+    return True if assume_yes else confirm("Proceed?")
+
+
+def run_pass(result_dir: str, conditions: list[str], runner,
+             ground_truth_path: str, rules_path: str, criteria_path: str,
+             model: str = DEFAULT_MODEL, concurrency: int = DEFAULT_CONCURRENCY,
+             force: bool = False, prompts: set[int] | None = None) -> dict:
+    """Judge every (cached-miss) result under each condition dir."""
+    gt = load_ground_truth(ground_truth_path)
+    rules = load_by_prompt_idx(rules_path)
+    criteria = load_by_prompt_idx(criteria_path)
+
+    work: list[tuple[str, JudgeInput, str]] = []  # (cond, input, verdict_path)
+    stats = {"judged": 0, "skipped": 0, "errors": 0, "halted": False,
+             "error_stems": []}
+    for cond in conditions:
+        cond_dir = os.path.join(result_dir, cond)
+        for fileidx, stem in discover_results(cond_dir):
+            if prompts is not None and fileidx not in prompts:
+                continue
+            vpath = os.path.join(cond_dir, stem + ".judge.json")
+            if os.path.exists(vpath) and not force:
+                stats["skipped"] += 1
+                continue
+            run = stem.rsplit("-", 1)[-1]  # "run01"
+            work.append((cond, gather_input(cond_dir, fileidx, run, gt, rules, criteria), vpath))
+
+    halt = threading.Event()
+
+    def do_one(item):
+        cond, ji, vpath = item
+        if halt.is_set():
+            return ("halted", ji.stem)
+        try:
+            verdict = judge_one(ji, runner, model=model)
+        except AuthError:
+            halt.set()
+            return ("auth", ji.stem)
+        except Exception as e:  # parse exhaustion, claude failures
+            return ("error", f"{cond}/{ji.stem}: {e}")
+        tmp = vpath + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(verdict, f, indent=2)
+        os.replace(tmp, vpath)
+        return ("ok", ji.stem)
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for status, detail in pool.map(do_one, work):
+            if status == "ok":
+                stats["judged"] += 1
+            elif status == "error":
+                stats["errors"] += 1
+                stats["error_stems"].append(detail)
+            elif status == "auth":
+                stats["halted"] = True
+    if stats["halted"]:
+        print("AUTH ERROR: pass halted (no refresh attempted - rerun after "
+              "/login; completed verdicts are cached).", file=sys.stderr)
+    return stats

@@ -433,3 +433,97 @@ class TestJudgeOne:
         run = runner_returning(json.dumps(verdict))
         v = jr.judge_one(_ji(criteria=crit), run)
         assert v["intent_fit"] == "pass"  # all must met; nice ignored
+
+    def test_checklist_rollup_tolerates_whitespace_case_drift(self):
+        crit = {"prompt_idx": 1, "must": ["routes by tier"], "nice": []}
+        verdict = dict(GOOD, intent_fit="fail",
+                       criteria=[{"criterion": "  Routes by  tier ", "met": True}])
+        run = runner_returning(json.dumps(verdict))
+        v = jr.judge_one(_ji(criteria=crit), run)
+        assert v["intent_fit"] == "pass"
+
+
+def make_multi_tree(tmp_path, idxs=(0, 1)):
+    for i in idxs:
+        make_result_tree(tmp_path, fileidx=i)
+    gt_file = tmp_path / "gt.jsonl"
+    write_jsonl(gt_file, GT)
+    return tmp_path, str(gt_file)
+
+
+class TestRunPass:
+    def test_writes_verdicts_and_skips_cached(self, tmp_path):
+        root, gt = make_multi_tree(tmp_path)
+        run = runner_returning(*([json.dumps(GOOD)] * 2))
+        stats = jr.run_pass(str(root), ["cond-a"], run, ground_truth_path=gt,
+                            rules_path=str(tmp_path / "no-rules.jsonl"),
+                            criteria_path=str(tmp_path / "no-crit.jsonl"),
+                            concurrency=2)
+        assert stats["judged"] == 2 and stats["errors"] == 0
+        vfile = root / "cond-a" / "prompt-000-run01.judge.json"
+        assert json.loads(vfile.read_text())["intent_fit"] == "pass"
+        # second pass: everything cached, zero runner calls
+        run2 = runner_returning()
+        stats2 = jr.run_pass(str(root), ["cond-a"], run2, ground_truth_path=gt,
+                             rules_path=str(tmp_path / "no-rules.jsonl"),
+                             criteria_path=str(tmp_path / "no-crit.jsonl"))
+        assert stats2["skipped"] == 2 and run2.calls == []
+
+    def test_force_rejudges(self, tmp_path):
+        root, gt = make_multi_tree(tmp_path, idxs=(0,))
+        run = runner_returning(json.dumps(GOOD), json.dumps(GOOD))
+        common = dict(ground_truth_path=gt,
+                      rules_path=str(tmp_path / "n.jsonl"),
+                      criteria_path=str(tmp_path / "n.jsonl"))
+        jr.run_pass(str(root), ["cond-a"], run, **common)
+        stats = jr.run_pass(str(root), ["cond-a"], run, force=True, **common)
+        assert stats["judged"] == 1 and stats["skipped"] == 0
+
+    def test_auth_error_halts_pass_no_partial_verdict(self, tmp_path):
+        root, gt = make_multi_tree(tmp_path, idxs=(0, 1, 3))
+        make_result_tree(tmp_path, fileidx=3)
+
+        def run(prompt):
+            raise jr.AuthError("401 from API")
+        stats = jr.run_pass(str(root), ["cond-a"], run, ground_truth_path=gt,
+                            rules_path=str(tmp_path / "n.jsonl"),
+                            criteria_path=str(tmp_path / "n.jsonl"),
+                            concurrency=1)
+        assert stats["halted"] is True
+        assert not list((root / "cond-a").glob("*.judge.json"))  # nothing partial
+
+    def test_parse_failure_counts_error_writes_nothing(self, tmp_path):
+        root, gt = make_multi_tree(tmp_path, idxs=(0,))
+        run = runner_returning("junk", "junk", "junk")
+        stats = jr.run_pass(str(root), ["cond-a"], run, ground_truth_path=gt,
+                            rules_path=str(tmp_path / "n.jsonl"),
+                            criteria_path=str(tmp_path / "n.jsonl"))
+        assert stats["errors"] == 1 and stats["judged"] == 0
+        assert not list((root / "cond-a").glob("*.judge.json"))
+
+
+class TestPreflight:
+    def _creds(self, tmp_path, expires_in_s):
+        p = tmp_path / "creds.json"
+        now_ms = 1_750_000_000_000  # fixed epoch for determinism
+        p.write_text(json.dumps(
+            {"claudeAiOauth": {"expiresAt": now_ms + expires_in_s * 1000}}))
+        return str(p), now_ms / 1000
+
+    def test_token_outlives_pass_ok(self, tmp_path):
+        creds, now_s = self._creds(tmp_path, expires_in_s=3600)
+        assert jr.preflight_ok(creds, n_calls=32, concurrency=16,
+                               assume_yes=False, now_s=now_s) is True
+
+    def test_token_expires_mid_pass_warns(self, tmp_path):
+        # 256 calls / 16 workers * 30s = 480s estimated; token dies in 60s
+        creds, now_s = self._creds(tmp_path, expires_in_s=60)
+        assert jr.preflight_ok(creds, n_calls=256, concurrency=16,
+                               assume_yes=False, now_s=now_s,
+                               confirm=lambda msg: False) is False
+        assert jr.preflight_ok(creds, n_calls=256, concurrency=16,
+                               assume_yes=True, now_s=now_s) is True
+
+    def test_missing_creds_file_warns_but_does_not_crash(self, tmp_path):
+        assert jr.preflight_ok(str(tmp_path / "nope.json"), n_calls=4,
+                               concurrency=4, assume_yes=True, now_s=0) is True
