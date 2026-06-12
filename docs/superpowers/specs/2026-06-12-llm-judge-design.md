@@ -33,9 +33,17 @@ headless `claude -p`) to render a per-result verdict on two dimensions:
   mode (Option C):** any prompt with an entry in a new `judge_criteria.jsonl`
   is judged in checklist mode; all others get binary pass/fail. Upgrading a
   prompt = adding one JSONL line, zero code changes.
-- **Invocation via `claude -p --model opus`:** reuses existing Claude Code
-  auth. No API key, no scratch-HOME credential copying (avoids the OAuth
-  fragility seen in eval scratch sessions).
+- **Invocation via `claude -p --model opus` in an ISOLATED config dir:**
+  reuses existing Claude Code auth (no API key), but judge calls must NOT run
+  against the user's live config — that would load the Hindsight MCP +
+  auto-recall hooks (injecting dan-shared/n8n-bank context into the judge
+  prompt → contamination and unblinding) and the n8n-knowledge plugin itself,
+  and auto-retain would pollute memory banks with judge chatter. The judge
+  creates a scratch `CLAUDE_CONFIG_DIR` with clean settings (no plugins, no
+  hooks), an empty MCP config (`--strict-mcp-config`), and the live
+  `~/.claude/.credentials.json` **symlinked, never copied** (the eval
+  harness's credential `cp` went stale mid-run and 401'd an entire arm on
+  2026-06-12 — the symlink always sees the rotating file).
 - **Default concurrency 16** (flag-overridable). Judge calls are single-turn,
   no tools, and never touch the Hindsight/validator services, so eval-side
   load incidents don't apply. Back off and retry on rate-limit errors rather
@@ -130,10 +138,12 @@ For each `prompt-XXX-runYY.json` under each condition dir:
 
 ## Auth handling (lessons from the 2026-06-12 OAuth incidents)
 
-The judge runs in the user's normal environment — no scratch HOME, no
-credential copying — so the stale-snapshot failure that 401'd an entire
-Sonnet eval arm (credentials `cp`'d at launch, token rotated a minute later)
-cannot occur here. Two residual risks are handled explicitly:
+The judge runs in a scratch config dir (for plugin/hook/MCP isolation — see
+Decisions) but the credentials file is a **symlink to the live
+`~/.claude/.credentials.json`**, never a copy, so the stale-snapshot failure
+that 401'd an entire Sonnet eval arm (credentials `cp`'d at launch, token
+rotated a minute later) cannot occur here. Two residual risks are handled
+explicitly:
 
 - **Preflight expiry check:** before launching a pass, read
   `~/.claude/.credentials.json` `expiresAt`. If the token expires within the
@@ -168,15 +178,20 @@ fixture verdicts/garbage):
    missing workflow → local fail-closed verdict without a claude call.
 3. **Blinding:** constructed judge input contains no condition names, model
    names, or file paths for a fixture result.
-4. **Mode switching:** prompt with criteria entry → checklist prompt +
+4. **Isolation:** the constructed invocation sets a scratch
+   `CLAUDE_CONFIG_DIR` containing clean settings (no plugins/hooks), passes
+   `--strict-mcp-config` with an empty MCP config, and the scratch
+   credentials file is a symlink to the live one (assert `os.path.islink`),
+   never a copy.
+5. **Mode switching:** prompt with criteria entry → checklist prompt +
    roll-up logic (all must met = pass; one unmet = fail; nice ignored).
-5. **Cache semantics:** existing `.judge.json` skipped; `--force` re-judges.
-6. **Aggregation math:** percentages, n/a exclusion from gotcha denominator,
+6. **Cache semantics:** existing `.judge.json` skipped; `--force` re-judges.
+7. **Aggregation math:** percentages, n/a exclusion from gotcha denominator,
    errors counted separately from fails.
-7. **Auth handling:** preflight expiry math (token expiring inside the
+8. **Auth handling:** preflight expiry math (token expiring inside the
    estimated window → warning path); a mocked 401 mid-pass halts all workers,
    writes no partial verdict, and a rerun resumes from the cache.
-8. **Live smoke (manual gate):** judge 2–3 results from the 2026-06-12
+9. **Live smoke (manual gate):** judge 2–3 results from the 2026-06-12
    defaults smoke dir (`out/eval/20260612-075953-v2`) with real Opus before
    any full pass — orchestrator-run, with Dan's go-ahead per the standing
    eval-approval rule.
