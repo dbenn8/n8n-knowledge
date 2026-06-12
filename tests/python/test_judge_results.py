@@ -182,3 +182,50 @@ class TestGathering:
         make_result_tree(tmp_path, fileidx=3)
         found = jr.discover_results(str(root / "cond-a"))
         assert found == [(0, "prompt-000-run01"), (3, "prompt-003-run01")]
+
+
+def _ji(**kw):
+    base = dict(fileidx=1, stem="prompt-001-run01",
+                prompt_text="send an email via gmail",
+                workflow_text=json.dumps(WORKFLOW), workflow_source="validated",
+                validation={"valid": True, "error_count": 0, "warning_count": 1},
+                gotcha=None, criteria=None)
+    base.update(kw)
+    return jr.JudgeInput(**base)
+
+
+class TestBuildPrompt:
+    def test_contains_request_and_workflow(self):
+        p = jr.build_prompt(_ji())
+        assert "send an email via gmail" in p
+        assert "n8n-nodes-base.slack" in p
+
+    def test_blinded_no_provenance(self):
+        p = jr.build_prompt(_ji())
+        low = p.lower()
+        for leak in ("plugin", "n8n-mcp", "mcp", "deepseek", "sonnet",
+                     "condition", "/users/", "enrichment"):
+            assert leak not in low, f"provenance leak: {leak}"
+
+    def test_validity_does_not_imply_intent_line(self):
+        assert "does not imply" in jr.build_prompt(_ji()).lower()
+
+    def test_gotcha_section_when_rule_present(self):
+        p = jr.build_prompt(_ji(gotcha=RULES[0]))
+        assert "Gmail node breaks on X" in p
+        assert "Use HTTP Request with Bearer auth" in p
+
+    def test_no_gotcha_section_without_rule(self):
+        p = jr.build_prompt(_ji())
+        assert "not_applicable" in p  # instructed default
+        assert "Known gotcha" not in p
+
+    def test_checklist_mode_lists_criteria(self):
+        crit = {"prompt_idx": 1, "must": ["uses gmail or http", "sends to recipient"],
+                "nice": ["retries on failure"]}
+        p = jr.build_prompt(_ji(criteria=crit))
+        assert "uses gmail or http" in p and "retries on failure" in p
+        assert '"criteria"' in p  # response schema mentions criteria array
+
+    def test_json_only_instruction(self):
+        assert "single JSON object" in jr.build_prompt(_ji())

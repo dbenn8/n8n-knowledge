@@ -211,3 +211,71 @@ def discover_results(cond_dir: str) -> list[tuple[int, str]]:
         if m:
             out.append((int(m.group(1)), stem))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Judge prompt (BLINDED: no condition/model/path provenance may appear here)
+# ---------------------------------------------------------------------------
+
+def build_prompt(ji: JudgeInput) -> str:
+    parts: list[str] = []
+    parts.append(
+        "You are an expert n8n workflow reviewer. Judge the workflow below "
+        "strictly on the evidence in its JSON — node types, parameters, "
+        "connections. Quote node names/types/params in your reasoning."
+    )
+    parts.append("## User request\n" + ji.prompt_text)
+    parts.append("## Workflow JSON\n" + (ji.workflow_text or "(missing)"))
+
+    if ji.validation is not None:
+        v = ji.validation
+        status = "schema-valid" if v["valid"] else f"schema-invalid ({v['error_count']} errors)"
+        parts.append(
+            f"## Validator context\nThe workflow is {status} with "
+            f"{v['warning_count']} warning(s). NOTE: schema validity does NOT "
+            "imply the workflow accomplishes the request — judge intent fit "
+            "independently."
+        )
+    else:
+        parts.append(
+            "## Validator context\nNo validator report available. NOTE: schema "
+            "validity does NOT imply intent fit — judge independently."
+        )
+
+    if ji.gotcha:
+        parts.append(
+            "## Known gotcha to check\n"
+            f"Bug: {ji.gotcha.get('gotcha', '')}\n"
+            f"Documented workaround: {ji.gotcha.get('workaround', '')}\n"
+            "Set gotcha_handled to pass only if the workflow's design avoids "
+            "the bug (e.g. applies the workaround); fail if it walks into it."
+        )
+        gotcha_instruction = '"gotcha_handled": "pass" or "fail"'
+    else:
+        gotcha_instruction = '"gotcha_handled": "not_applicable"'
+
+    schema_lines = [
+        '"intent_fit": "pass" or "fail"',
+        '"intent_reasoning": "<evidence-citing paragraph>"',
+        gotcha_instruction,
+        '"gotcha_reasoning": "<one sentence>"',
+        '"confidence": "high" or "low"',
+    ]
+
+    if ji.criteria:
+        must = ji.criteria.get("must", [])
+        nice = ji.criteria.get("nice", [])
+        crit_lines = "\n".join(f"- [must] {c}" for c in must)
+        if nice:
+            crit_lines += "\n" + "\n".join(f"- [nice] {c}" for c in nice)
+        parts.append(
+            "## Criteria checklist\nEvaluate each criterion against the "
+            "workflow and report it in a criteria array:\n" + crit_lines
+        )
+        schema_lines.append('"criteria": [{"criterion": "<text>", "met": true|false}, ...] (one entry per listed criterion, exact same text)')
+
+    parts.append(
+        "## Your verdict\nRespond with a single JSON object and nothing else:\n"
+        "{\n  " + ",\n  ".join(schema_lines) + "\n}"
+    )
+    return "\n\n".join(parts)
