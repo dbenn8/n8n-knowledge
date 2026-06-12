@@ -337,8 +337,9 @@ class TestRunClaude:
         def fake_run(cmd, **kw):
             return self._proc(1, out=verdicty, err="transient failure")
         monkeypatch.setattr(jr.subprocess, "run", fake_run)
-        with pytest.raises(RuntimeError):
-            jr.run_claude("p", "opus", "/tmp/cfg")  # RuntimeError, NOT AuthError
+        with pytest.raises(RuntimeError) as ei:
+            jr.run_claude("p", "opus", "/tmp/cfg")
+        assert type(ei.value) is RuntimeError  # must NOT be the AuthError subclass
 
     def test_stderr_401_raises_auth_error(self, monkeypatch):
         def fake_run(cmd, **kw):
@@ -365,3 +366,70 @@ class TestRunClaude:
         monkeypatch.setattr(jr.subprocess, "run", fake_run)
         assert jr.run_claude("p", "opus", "/tmp/cfg") == "verdict"
         assert len(calls) == 3
+
+
+def runner_returning(*responses):
+    """Fake runner yielding each response in turn; records prompts."""
+    calls = []
+    it = iter(responses)
+
+    def run(prompt):
+        calls.append(prompt)
+        return next(it)
+    run.calls = calls
+    return run
+
+
+class TestJudgeOne:
+    def test_happy_path_stamps_metadata(self):
+        run = runner_returning(json.dumps(GOOD))
+        v = jr.judge_one(_ji(), run, model="opus")
+        assert v["intent_fit"] == "pass"
+        assert v["judge_model"] == "opus"
+        assert v["workflow_source"] == "validated"
+        assert "judged_at" in v
+
+    def test_fail_closed_missing_workflow_no_call(self):
+        run = runner_returning()
+        v = jr.judge_one(_ji(workflow_text=None, workflow_source="missing"), run)
+        assert v["intent_fit"] == "fail"
+        assert "no parseable workflow artifact" in v["intent_reasoning"]
+        assert v["gotcha_handled"] == "not_applicable"  # no rule on this input
+        assert run.calls == []  # no claude call was made
+
+    def test_fail_closed_with_gotcha_rule(self):
+        run = runner_returning()
+        v = jr.judge_one(_ji(workflow_text=None, workflow_source="missing",
+                             gotcha=RULES[0]), run)
+        assert v["gotcha_handled"] == "fail"
+
+    def test_parse_retry_then_success(self):
+        run = runner_returning("no json here", json.dumps(GOOD))
+        v = jr.judge_one(_ji(), run)
+        assert v["intent_fit"] == "pass"
+        assert len(run.calls) == 2
+        assert "parse" in run.calls[1].lower()  # retry prompt mentions the error
+
+    def test_retries_exhausted_raises(self):
+        run = runner_returning("junk", "junk", "junk")
+        with pytest.raises(jr.VerdictParseError):
+            jr.judge_one(_ji(), run)
+
+    def test_checklist_rollup_overrides_judge(self):
+        crit = {"prompt_idx": 1, "must": ["a", "b"], "nice": ["c"]}
+        verdict = dict(GOOD, intent_fit="pass",
+                       criteria=[{"criterion": "a", "met": True},
+                                 {"criterion": "b", "met": False},
+                                 {"criterion": "c", "met": True}])
+        run = runner_returning(json.dumps(verdict))
+        v = jr.judge_one(_ji(criteria=crit), run)
+        assert v["intent_fit"] == "fail"  # unmet 'must' overrides judge's pass
+
+    def test_checklist_all_must_met_passes(self):
+        crit = {"prompt_idx": 1, "must": ["a"], "nice": ["c"]}
+        verdict = dict(GOOD, intent_fit="fail",
+                       criteria=[{"criterion": "a", "met": True},
+                                 {"criterion": "c", "met": False}])
+        run = runner_returning(json.dumps(verdict))
+        v = jr.judge_one(_ji(criteria=crit), run)
+        assert v["intent_fit"] == "pass"  # all must met; nice ignored

@@ -367,3 +367,66 @@ def run_claude(prompt: str, model: str, config_dir: str) -> str:
             continue
         break
     raise RuntimeError(f"claude call failed: {last_err}")
+
+
+# ---------------------------------------------------------------------------
+# Single-result judgment
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _stamp(v: dict, ji: JudgeInput, model: str) -> dict:
+    v["judge_model"] = model
+    v["workflow_source"] = ji.workflow_source
+    v["judged_at"] = _now_iso()
+    return v
+
+
+def rollup_checklist(verdict: dict, criteria: dict) -> dict:
+    """Recompute intent_fit from the judge's per-criterion calls.
+
+    We trust the judge on each criterion but never on the roll-up:
+    pass iff every 'must' criterion is met. 'nice' items are informational.
+    """
+    met = {c["criterion"]: c["met"] for c in verdict.get("criteria", [])}
+    verdict["intent_fit"] = "pass" if all(met.get(m, False) for m in criteria.get("must", [])) else "fail"
+    return verdict
+
+
+def judge_one(ji: JudgeInput, runner, model: str = DEFAULT_MODEL) -> dict:
+    """Judge one result. Raises AuthError / VerdictParseError upward.
+
+    Fail-closed: a missing workflow is a local verdict — no claude call.
+    """
+    if ji.workflow_text is None:
+        return _stamp({
+            "intent_fit": "fail",
+            "intent_reasoning": "no parseable workflow artifact",
+            "gotcha_handled": "fail" if ji.gotcha else "not_applicable",
+            "gotcha_reasoning": "no parseable workflow artifact",
+            "confidence": "high",
+        }, ji, model)
+
+    checklist_mode = ji.criteria is not None
+    prompt = build_prompt(ji)
+    last_error = ""
+    for attempt in range(PARSE_RETRIES + 1):
+        text = runner(prompt if attempt == 0 else
+                      prompt + f"\n\nYour previous response could not be used "
+                      f"(parse/validation error: {last_error}). Respond with "
+                      "ONLY the JSON object this time.")
+        try:
+            verdict = parse_verdict(text)
+        except VerdictParseError as e:
+            last_error = str(e)
+            continue
+        problems = validate_verdict(verdict, checklist_mode)
+        if problems:
+            last_error = "; ".join(problems)
+            continue
+        if checklist_mode:
+            verdict = rollup_checklist(verdict, ji.criteria)
+        return _stamp(verdict, ji, model)
+    raise VerdictParseError(f"retries exhausted: {last_error}")
