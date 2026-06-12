@@ -10,7 +10,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOK="$SCRIPT_DIR/../hooks/check-draft-stop.sh"
 
-STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+# Hermetic per-user runtime dir (hook resolves $NK_STATE_DIR/workflow-validation from this)
+export N8N_KNOWLEDGE_RUNTIME_DIR="$(mktemp -d)"
+STATE_DIR="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation"
 mkdir -p "$STATE_DIR"
 
 WORK_DIR="$(mktemp -d)"

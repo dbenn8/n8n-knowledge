@@ -47,7 +47,10 @@ echo "=== adaptive budget tests ==="
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+# Hermetic per-user runtime dir (hook resolves $NK_STATE_DIR/workflow-validation from this)
+export N8N_KNOWLEDGE_RUNTIME_DIR="$WORK_DIR/runtime"
+
+STATE_DIR="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation"
 mkdir -p "$STATE_DIR"
 
 hook_input() {

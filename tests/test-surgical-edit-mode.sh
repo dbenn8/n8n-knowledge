@@ -46,6 +46,9 @@ echo "=== surgical edit mode tests ==="
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
+# Hermetic per-user runtime dir (hook resolves $NK_STATE_DIR/workflow-validation from this)
+export N8N_KNOWLEDGE_RUNTIME_DIR="$WORK_DIR/runtime"
+
 hook_input() {
   # $1 = session id, $2 = file path
   python3 - "$1" "$2" "$WORK_DIR" << 'PYEOF'
@@ -65,7 +68,7 @@ DRAFT_FILE="$WORK_DIR/draft.workflow.json"
 printf '!!DRAFT!!\n{"nodes": [], "connections": {}}\n' > "$DRAFT_FILE"
 
 SID="surgical-marker-test-$$"
-STATE_FILE="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation/$SID.json"
+STATE_FILE="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation/$SID.json"
 rm -f "$STATE_FILE"
 
 OUT=$(hook_input "$SID" "$DRAFT_FILE" | CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true bash "$HOOK")
@@ -82,7 +85,7 @@ assert_eq "draft-marker skip also applies in surgical mode" "" "$OUT"
 PLAIN_FILE="$WORK_DIR/plain.workflow.json"
 printf '{"nodes": [], "connections": {}}\n' > "$PLAIN_FILE"
 SID2="surgical-plain-test-$$"
-STATE_FILE2="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation/$SID2.json"
+STATE_FILE2="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation/$SID2.json"
 rm -f "$STATE_FILE2"
 hook_input "$SID2" "$PLAIN_FILE" | CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true bash "$HOOK" > /dev/null || true
 assert_eq "markerless file still reaches budget accounting" "present" "$([ -f "$STATE_FILE2" ] && echo present || echo absent)"
@@ -127,7 +130,7 @@ JSONEOF
   assert_not_contains "default mode has no marker instructions" "!!DRAFT!!" "$REWRITE_OUT"
 
   # --- Part 3: draft_pending recording / clearing (Task 4b) ---
-  STATE_DIR_4B="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+  STATE_DIR_4B="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation"
   read_pending() {
     python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('draft_pending',''))" "$1" 2>/dev/null
   }
