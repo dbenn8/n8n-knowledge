@@ -22,7 +22,7 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -495,6 +495,7 @@ def run_pass(result_dir: str, conditions: list[str], runner,
 
     def do_one(item):
         cond, ji, vpath = item
+        # Halt is best-effort: items already past this gate finish and write valid verdicts.
         if halt.is_set():
             return ("halted", ji.stem)
         try:
@@ -523,3 +524,135 @@ def run_pass(result_dir: str, conditions: list[str], runner,
         print("AUTH ERROR: pass halted (no refresh attempted - rerun after "
               "/login; completed verdicts are cached).", file=sys.stderr)
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Aggregation & CLI
+# ---------------------------------------------------------------------------
+
+def aggregate(result_dir: str, conditions: list[str]) -> dict:
+    """Read all .judge.json files, compute per-condition stats, write summary."""
+    summary = {"generated_at": _now_iso(), "conditions": {}}
+    for cond in conditions:
+        cond_dir = os.path.join(result_dir, cond)
+        judged = skipped = 0
+        intent_pass = gotcha_pass = gotcha_fail = gotcha_na = 0
+        fails: list[dict] = []
+        for fileidx, stem in discover_results(cond_dir):
+            vpath = os.path.join(cond_dir, stem + ".judge.json")
+            if not os.path.exists(vpath):
+                skipped += 1
+                continue
+            with open(vpath) as f:
+                v = json.load(f)
+            judged += 1
+            if v["intent_fit"] == "pass":
+                intent_pass += 1
+            else:
+                fails.append({"stem": stem, "dimension": "intent",
+                              "reason": v.get("intent_reasoning", "")[:200]})
+            g = v["gotcha_handled"]
+            if g == "pass":
+                gotcha_pass += 1
+            elif g == "fail":
+                gotcha_fail += 1
+                fails.append({"stem": stem, "dimension": "gotcha",
+                              "reason": v.get("gotcha_reasoning", "")[:200]})
+            else:
+                gotcha_na += 1
+        applicable = gotcha_pass + gotcha_fail
+        summary["conditions"][cond] = {
+            "judged": judged,
+            "unjudged": skipped,
+            "intent_fit_pct": round(100 * intent_pass / judged, 1) if judged else None,
+            "gotcha_applicable": applicable,
+            "gotcha_handled_pct": round(100 * gotcha_pass / applicable, 1) if applicable else None,
+            "gotcha_na": gotcha_na,
+            "fails": fails,
+        }
+    out = os.path.join(result_dir, "judge-summary.json")
+    with open(out, "w") as f:
+        json.dump(summary, f, indent=2)
+    return summary
+
+
+def format_table(summary: dict) -> str:
+    lines = [f"{'condition':<14} {'judged':>6} {'intent fit':>10} "
+             f"{'gotcha ok':>9} {'(n/a)':>5} {'unjudged':>8}"]
+    for cond, c in summary["conditions"].items():
+        intent = f"{c['intent_fit_pct']}%" if c["intent_fit_pct"] is not None else "-"
+        gotcha = f"{c['gotcha_handled_pct']}%" if c["gotcha_handled_pct"] is not None else "-"
+        lines.append(f"{cond:<14} {c['judged']:>6} {intent:>10} "
+                     f"{gotcha:>9} {c['gotcha_na']:>5} {c['unjudged']:>8}")
+    fails = [(cond, f) for cond, c in summary["conditions"].items() for f in c["fails"]]
+    if fails:
+        lines.append("\nFAILS:")
+        for cond, f in fails:
+            lines.append(f"  [{cond}] {f['stem']} ({f['dimension']}): {f['reason']}")
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Post-hoc LLM judge for eval result dirs")
+    ap.add_argument("result_dir")
+    ap.add_argument("--conditions", help="comma-separated; default: all subdirs")
+    ap.add_argument("--prompts", help="comma-separated fileidx filter")
+    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--yes", action="store_true", help="skip preflight confirm")
+    ap.add_argument("--ground-truth", default=os.path.join(SCRIPT_DIR, "ground_truth.jsonl"))
+    ap.add_argument("--rules", default=os.path.join(SCRIPT_DIR, "gotcha_rules.jsonl"))
+    ap.add_argument("--criteria", default=os.path.join(SCRIPT_DIR, "judge_criteria.jsonl"))
+    args = ap.parse_args(argv)
+
+    if args.conditions:
+        conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
+    else:
+        conditions = sorted(d for d in os.listdir(args.result_dir)
+                            if os.path.isdir(os.path.join(args.result_dir, d)))
+    prompts = ({int(p) for p in args.prompts.split(",")} if args.prompts else None)
+
+    if args.dry_run:
+        gt = load_ground_truth(args.ground_truth)
+        rules = load_by_prompt_idx(args.rules)
+        criteria = load_by_prompt_idx(args.criteria)
+        for cond in conditions:
+            cond_dir = os.path.join(args.result_dir, cond)
+            for fileidx, stem in discover_results(cond_dir):
+                if prompts is not None and fileidx not in prompts:
+                    continue
+                run = stem.rsplit("-", 1)[-1]
+                ji = gather_input(cond_dir, fileidx, run, gt, rules, criteria)
+                print(f"=== {cond}/{stem} ===")
+                print(build_prompt(ji))
+        return 0
+
+    n_calls = sum(len(discover_results(os.path.join(args.result_dir, c)))
+                  for c in conditions)
+    creds = os.path.expanduser("~/.claude/.credentials.json")
+    if not preflight_ok(creds, n_calls, args.concurrency, assume_yes=args.yes):
+        return 1
+
+    cfg = make_scratch_config()
+    try:
+        runner = lambda prompt: run_claude(prompt, args.model, cfg)
+        stats = run_pass(args.result_dir, conditions, runner,
+                         ground_truth_path=args.ground_truth,
+                         rules_path=args.rules, criteria_path=args.criteria,
+                         model=args.model, concurrency=args.concurrency,
+                         force=args.force, prompts=prompts)
+    finally:
+        cleanup_scratch_config(cfg)
+
+    print(f"judged={stats['judged']} skipped={stats['skipped']} "
+          f"errors={stats['errors']} halted={stats['halted']}")
+    for e in stats["error_stems"]:
+        print(f"  ERROR {e}", file=sys.stderr)
+    print(format_table(aggregate(args.result_dir, conditions)))
+    return 2 if stats["halted"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

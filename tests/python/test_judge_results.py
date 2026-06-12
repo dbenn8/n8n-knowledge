@@ -501,6 +501,23 @@ class TestRunPass:
         assert stats["errors"] == 1 and stats["judged"] == 0
         assert not list((root / "cond-a").glob("*.judge.json"))
 
+    def test_concurrent_pass_judges_everything_once(self, tmp_path):
+        idxs = tuple(range(20))
+        for i in idxs:
+            make_result_tree(tmp_path, fileidx=i)
+        gt_file = tmp_path / "gt.jsonl"
+        write_jsonl(gt_file, [{"id": f"p{i}", "prompt": f"prompt {i}"} for i in idxs])
+        run = runner_returning(*([json.dumps(GOOD)] * 20))
+        stats = jr.run_pass(str(tmp_path), ["cond-a"], run,
+                            ground_truth_path=str(gt_file),
+                            rules_path=str(tmp_path / "n.jsonl"),
+                            criteria_path=str(tmp_path / "n.jsonl"),
+                            concurrency=8)
+        assert stats["judged"] == 20 and stats["errors"] == 0
+        verdicts = sorted((tmp_path / "cond-a").glob("*.judge.json"))
+        assert len(verdicts) == 20
+        assert len(run.calls) == 20  # every item judged exactly once
+
 
 class TestPreflight:
     def _creds(self, tmp_path, expires_in_s):
@@ -527,3 +544,77 @@ class TestPreflight:
     def test_missing_creds_file_warns_but_does_not_crash(self, tmp_path):
         assert jr.preflight_ok(str(tmp_path / "nope.json"), n_calls=4,
                                concurrency=4, assume_yes=True, now_s=0) is True
+
+
+class TestAggregate:
+    def _write_verdict(self, root, cond, stem, intent="pass", gotcha="not_applicable"):
+        v = dict(GOOD, intent_fit=intent, gotcha_handled=gotcha)
+        (root / cond / f"{stem}.judge.json").write_text(json.dumps(v))
+
+    def test_aggregation_math(self, tmp_path):
+        root, _ = make_multi_tree(tmp_path, idxs=(0, 1))
+        make_result_tree(tmp_path, fileidx=3)
+        self._write_verdict(root, "cond-a", "prompt-000-run01", "pass", "not_applicable")
+        self._write_verdict(root, "cond-a", "prompt-001-run01", "fail", "pass")
+        self._write_verdict(root, "cond-a", "prompt-003-run01", "pass", "fail")
+        summary = jr.aggregate(str(root), ["cond-a"])
+        c = summary["conditions"]["cond-a"]
+        assert c["judged"] == 3
+        assert c["intent_fit_pct"] == pytest.approx(66.7, abs=0.1)
+        # gotcha denominator excludes not_applicable: 1 pass / 2 applicable
+        assert c["gotcha_handled_pct"] == pytest.approx(50.0, abs=0.1)
+        assert c["unjudged"] == 0
+        assert len(c["fails"]) == 2  # one intent fail + one gotcha fail
+        assert os.path.exists(os.path.join(str(root), "judge-summary.json"))
+
+    def test_unjudged_counted(self, tmp_path):
+        root, _ = make_multi_tree(tmp_path, idxs=(0, 1))
+        self._write_verdict(root, "cond-a", "prompt-000-run01")
+        summary = jr.aggregate(str(root), ["cond-a"])
+        assert summary["conditions"]["cond-a"]["unjudged"] == 1
+
+    def test_format_table_contains_pcts(self, tmp_path):
+        root, _ = make_multi_tree(tmp_path, idxs=(0,))
+        self._write_verdict(root, "cond-a", "prompt-000-run01")
+        table = jr.format_table(jr.aggregate(str(root), ["cond-a"]))
+        assert "cond-a" in table and "100.0%" in table
+
+
+class TestCli:
+    def test_dry_run_prints_inputs_no_calls(self, tmp_path, capsys, monkeypatch):
+        root, gt = make_multi_tree(tmp_path, idxs=(0,))
+        monkeypatch.setattr(jr, "run_claude", lambda *a, **k: pytest.fail("called claude"))
+        rc = jr.main([str(root), "--conditions", "cond-a", "--dry-run",
+                      "--ground-truth", gt])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "post a message to slack" in out
+
+    def test_main_judges_and_prints_table(self, tmp_path, capsys, monkeypatch):
+        root, gt = make_multi_tree(tmp_path, idxs=(0,))
+        monkeypatch.setattr(jr, "run_claude",
+                            lambda prompt, model, cfg: json.dumps(GOOD))
+        monkeypatch.setattr(jr, "preflight_ok", lambda *a, **k: True)
+        rc = jr.main([str(root), "--conditions", "cond-a", "--ground-truth", gt])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "intent" in out.lower() and "cond-a" in out
+
+    def test_main_discovers_condition_subdirs(self, tmp_path, monkeypatch, capsys):
+        root, gt = make_multi_tree(tmp_path, idxs=(0,))
+        (root / "clean-settings.json").write_text("{}")  # top-level non-dir noise
+        monkeypatch.setattr(jr, "run_claude",
+                            lambda prompt, model, cfg: json.dumps(GOOD))
+        monkeypatch.setattr(jr, "preflight_ok", lambda *a, **k: True)
+        rc = jr.main([str(root), "--ground-truth", gt])
+        assert rc == 0
+        assert "cond-a" in capsys.readouterr().out
+
+    def test_main_halted_returns_nonzero(self, tmp_path, monkeypatch):
+        root, gt = make_multi_tree(tmp_path, idxs=(0,))
+        def boom(prompt, model, cfg):
+            raise jr.AuthError("401")
+        monkeypatch.setattr(jr, "run_claude", boom)
+        monkeypatch.setattr(jr, "preflight_ok", lambda *a, **k: True)
+        assert jr.main([str(root), "--conditions", "cond-a",
+                        "--ground-truth", gt]) == 2
