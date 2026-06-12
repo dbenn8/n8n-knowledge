@@ -88,7 +88,10 @@ def validate_verdict(v: dict, checklist_mode: bool) -> list[str]:
             errors.append("criteria must be a non-empty list in checklist mode")
         else:
             for i, c in enumerate(crits):
-                if not isinstance(c, dict) or not isinstance(c.get("criterion"), str):
+                if not isinstance(c, dict):
+                    errors.append(f"criteria[{i}] must be an object")
+                    continue
+                if not isinstance(c.get("criterion"), str):
                     errors.append(f"criteria[{i}].criterion must be a string")
                 if not isinstance(c.get("met"), bool):
                     errors.append(f"criteria[{i}].met must be a boolean")

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -59,3 +58,12 @@ class TestValidateVerdict:
         assert jr.validate_verdict(v, checklist_mode=True) == []
         v_bad = dict(GOOD, criteria=[{"criterion": "routes by tier"}])
         assert any("met" in e for e in jr.validate_verdict(v_bad, checklist_mode=True))
+
+    def test_checklist_non_dict_criterion_reports_not_raises(self):
+        v = dict(GOOD, criteria=["not a dict"])
+        errors = jr.validate_verdict(v, checklist_mode=True)
+        assert any("criteria[0]" in e for e in errors)
+
+    def test_checklist_empty_list_rejected(self):
+        v = dict(GOOD, criteria=[])
+        assert any("criteria" in e for e in jr.validate_verdict(v, checklist_mode=True))
