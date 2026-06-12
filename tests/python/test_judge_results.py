@@ -579,6 +579,30 @@ class TestAggregate:
         table = jr.format_table(jr.aggregate(str(root), ["cond-a"]))
         assert "cond-a" in table and "100.0%" in table
 
+    def test_malformed_verdict_counted_not_crashing(self, tmp_path):
+        root, _ = make_multi_tree(tmp_path, idxs=(0, 1))
+        self._write_verdict(root, "cond-a", "prompt-000-run01")
+        (root / "cond-a" / "prompt-001-run01.judge.json").write_text("not json{")
+        summary = jr.aggregate(str(root), ["cond-a"])
+        c = summary["conditions"]["cond-a"]
+        assert c["judged"] == 1 and c["malformed"] == 1
+
+    def test_verdict_missing_keys_counted_malformed(self, tmp_path):
+        root, _ = make_multi_tree(tmp_path, idxs=(0,))
+        (root / "cond-a" / "prompt-000-run01.judge.json").write_text(json.dumps({"who": "knows"}))
+        summary = jr.aggregate(str(root), ["cond-a"])
+        c = summary["conditions"]["cond-a"]
+        assert c["judged"] == 0 and c["malformed"] == 1
+
+    def test_format_table_long_condition_names_align(self, tmp_path):
+        long_cond = "baseline-plugin-enrichment-v2"
+        root = make_result_tree(tmp_path, condition=long_cond)
+        self._write_verdict(root, long_cond, "prompt-000-run01")
+        table = jr.format_table(jr.aggregate(str(root), [long_cond]))
+        header, row = table.splitlines()[0], table.splitlines()[1]
+        assert row.startswith(long_cond)
+        assert header.index("judged") <= row.index("1")
+
 
 class TestCli:
     def test_dry_run_prints_inputs_no_calls(self, tmp_path, capsys, monkeypatch):
@@ -618,3 +642,23 @@ class TestCli:
         monkeypatch.setattr(jr, "preflight_ok", lambda *a, **k: True)
         assert jr.main([str(root), "--conditions", "cond-a",
                         "--ground-truth", gt]) == 2
+
+    def test_preflight_estimate_counts_only_pending(self, tmp_path, monkeypatch):
+        root, gt = make_multi_tree(tmp_path, idxs=(0, 1))
+        v = dict(GOOD)
+        (root / "cond-a" / "prompt-000-run01.judge.json").write_text(json.dumps(v))
+        seen = {}
+
+        def fake_preflight(creds, n_calls, concurrency, assume_yes):
+            seen["n_calls"] = n_calls
+            return True
+        monkeypatch.setattr(jr, "preflight_ok", fake_preflight)
+        monkeypatch.setattr(jr, "run_claude", lambda prompt, model, cfg: json.dumps(GOOD))
+        jr.main([str(root), "--conditions", "cond-a", "--ground-truth", gt])
+        assert seen["n_calls"] == 1  # one cached, one pending
+
+    def test_prompts_parse_error_exits_cleanly(self, tmp_path):
+        root, gt = make_multi_tree(tmp_path, idxs=(0,))
+        with pytest.raises(SystemExit):
+            jr.main([str(root), "--conditions", "cond-a", "--prompts", "a,b",
+                     "--ground-truth", gt])

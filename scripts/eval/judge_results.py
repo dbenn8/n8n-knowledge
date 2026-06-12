@@ -535,7 +535,7 @@ def aggregate(result_dir: str, conditions: list[str]) -> dict:
     summary = {"generated_at": _now_iso(), "conditions": {}}
     for cond in conditions:
         cond_dir = os.path.join(result_dir, cond)
-        judged = skipped = 0
+        judged = skipped = malformed = 0
         intent_pass = gotcha_pass = gotcha_fail = gotcha_na = 0
         fails: list[dict] = []
         for fileidx, stem in discover_results(cond_dir):
@@ -543,15 +543,20 @@ def aggregate(result_dir: str, conditions: list[str]) -> dict:
             if not os.path.exists(vpath):
                 skipped += 1
                 continue
-            with open(vpath) as f:
-                v = json.load(f)
+            try:
+                with open(vpath) as f:
+                    v = json.load(f)
+                intent = v["intent_fit"]
+                g = v["gotcha_handled"]
+            except (json.JSONDecodeError, OSError, KeyError, TypeError):
+                malformed += 1
+                continue
             judged += 1
-            if v["intent_fit"] == "pass":
+            if intent == "pass":
                 intent_pass += 1
             else:
                 fails.append({"stem": stem, "dimension": "intent",
                               "reason": v.get("intent_reasoning", "")[:200]})
-            g = v["gotcha_handled"]
             if g == "pass":
                 gotcha_pass += 1
             elif g == "fail":
@@ -564,6 +569,7 @@ def aggregate(result_dir: str, conditions: list[str]) -> dict:
         summary["conditions"][cond] = {
             "judged": judged,
             "unjudged": skipped,
+            "malformed": malformed,
             "intent_fit_pct": round(100 * intent_pass / judged, 1) if judged else None,
             "gotcha_applicable": applicable,
             "gotcha_handled_pct": round(100 * gotcha_pass / applicable, 1) if applicable else None,
@@ -577,13 +583,18 @@ def aggregate(result_dir: str, conditions: list[str]) -> dict:
 
 
 def format_table(summary: dict) -> str:
-    lines = [f"{'condition':<14} {'judged':>6} {'intent fit':>10} "
+    conds = list(summary["conditions"].keys())
+    w = max([9] + [len(c) for c in conds])
+    lines = [f"{'condition':<{w}} {'judged':>6} {'intent fit':>10} "
              f"{'gotcha ok':>9} {'(n/a)':>5} {'unjudged':>8}"]
     for cond, c in summary["conditions"].items():
         intent = f"{c['intent_fit_pct']}%" if c["intent_fit_pct"] is not None else "-"
         gotcha = f"{c['gotcha_handled_pct']}%" if c["gotcha_handled_pct"] is not None else "-"
-        lines.append(f"{cond:<14} {c['judged']:>6} {intent:>10} "
+        lines.append(f"{cond:<{w}} {c['judged']:>6} {intent:>10} "
                      f"{gotcha:>9} {c['gotcha_na']:>5} {c['unjudged']:>8}")
+    malformed_total = sum(c.get("malformed", 0) for c in summary["conditions"].values())
+    if malformed_total:
+        lines.append(f"\nMALFORMED VERDICTS: {malformed_total}")
     fails = [(cond, f) for cond, c in summary["conditions"].items() for f in c["fails"]]
     if fails:
         lines.append("\nFAILS:")
@@ -612,7 +623,11 @@ def main(argv=None) -> int:
     else:
         conditions = sorted(d for d in os.listdir(args.result_dir)
                             if os.path.isdir(os.path.join(args.result_dir, d)))
-    prompts = ({int(p) for p in args.prompts.split(",")} if args.prompts else None)
+    try:
+        prompts = ({int(p) for p in args.prompts.split(",") if p.strip()}
+                   if args.prompts else None)
+    except ValueError:
+        ap.error("--prompts must be a comma-separated list of integers")
 
     if args.dry_run:
         gt = load_ground_truth(args.ground_truth)
@@ -629,8 +644,15 @@ def main(argv=None) -> int:
                 print(build_prompt(ji))
         return 0
 
-    n_calls = sum(len(discover_results(os.path.join(args.result_dir, c)))
-                  for c in conditions)
+    n_calls = 0
+    for c in conditions:
+        cond_dir = os.path.join(args.result_dir, c)
+        for fileidx, stem in discover_results(cond_dir):
+            if prompts is not None and fileidx not in prompts:
+                continue
+            if not args.force and os.path.exists(os.path.join(cond_dir, stem + ".judge.json")):
+                continue
+            n_calls += 1
     creds = os.path.expanduser("~/.claude/.credentials.json")
     if not preflight_ok(creds, n_calls, args.concurrency, assume_yes=args.yes):
         return 1
