@@ -19,8 +19,8 @@ TOOL=$(read_field tool_name)
 CWD=$(read_field cwd)
 
 CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
-EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-rewrite}"
-BUDGET_MODE="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE:-static}"
+EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-surgical}"
+BUDGET_MODE="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE:-adaptive}"
 STATE_DIR="$NK_STATE_DIR/workflow-validation"
 
 # Resolve the file to validate based on the tool event.
@@ -286,7 +286,7 @@ trigger_count = result.get("trigger_count", 0)
 auto_changes = autofix.get("changes") or []
 calls_used = os.environ.get("CALLS_USED", "?")
 cap = os.environ.get("CAP", "?")
-budget_mode = os.environ.get("BUDGET_MODE", "static")
+budget_mode = os.environ.get("BUDGET_MODE", "adaptive")
 stagnant_used = os.environ.get("STAGNANT_USED", "0")
 warnings_block = (result.get("warnings_block") or "").strip()
 
@@ -382,7 +382,7 @@ auto_changes = autofix.get("changes") or []
 node_specs = os.environ.get("NODE_SPECS", "").strip()
 calls_used = os.environ.get("CALLS_USED", "?")
 cap = os.environ.get("CAP", "?")
-budget_mode = os.environ.get("BUDGET_MODE", "static")
+budget_mode = os.environ.get("BUDGET_MODE", "adaptive")
 stagnant_used = os.environ.get("STAGNANT_USED", "0")
 try:
     consec_stagnant = int(os.environ.get("CONSEC_STAGNANT", "0") or "0")
@@ -396,7 +396,7 @@ warnings_block = (result.get("warnings_block") or "").strip()
 if not feedback:
     raise SystemExit(1)
 
-edit_style = os.environ.get("EDIT_STYLE", "rewrite")
+edit_style = os.environ.get("EDIT_STYLE", "surgical")
 
 # Surgical-style recipe (default surgical guidance). When the model is
 # demonstrably stuck — two or more consecutive non-improving surgical rounds —

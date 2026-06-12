@@ -90,6 +90,7 @@ ST1="$STATE_DIR/$SID1.json"
 seed_state "$ST1" '{"calls": 2}'
 OUT1=$(hook_input "$SID1" "$NOTJSON_FILE" | \
   CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true \
+  CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=static \
   CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=2 bash "$HOOK")
 assert_contains "static default still caps at calls>=cap" "Validator limit reached" "$OUT1"
 rm -f "$ST1"
@@ -231,6 +232,7 @@ JSONEOF
   OUT8=$(hook_input "$SID8" "$INV8" | \
     CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true \
     CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=3 \
+    CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=static \
     CLAUDE_PLUGIN_OPTION_VALIDATORMODE=local bash "$HOOK" 2>/dev/null || true)
   assert_contains "static INVALID keeps classic budget wording" "calls used (" "$OUT8"
   assert_not_contains "static INVALID has no adaptive wording" "adaptive" "$OUT8"

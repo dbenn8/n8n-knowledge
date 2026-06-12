@@ -125,9 +125,11 @@ JSONEOF
   assert_not_contains "surgical mode drops the re-write guidance" "one complete re-write" "$SURGICAL_OUT"
 
   REWRITE_OUT=$(hook_input "rewrite-wording-$$" "$INVALID_FILE" | \
-    CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true bash "$HOOK")
-  assert_contains "default mode keeps re-write guidance" "one complete re-write" "$REWRITE_OUT"
-  assert_not_contains "default mode has no marker instructions" "!!DRAFT!!" "$REWRITE_OUT"
+    CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true \
+    CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=static \
+    CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE=rewrite bash "$HOOK")
+  assert_contains "rewrite mode keeps re-write guidance" "one complete re-write" "$REWRITE_OUT"
+  assert_not_contains "rewrite mode has no marker instructions" "!!DRAFT!!" "$REWRITE_OUT"
 
   # --- Part 3: draft_pending recording / clearing (Task 4b) ---
   STATE_DIR_4B="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation"
