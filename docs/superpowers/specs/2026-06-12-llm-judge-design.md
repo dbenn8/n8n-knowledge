@@ -150,6 +150,13 @@ explicitly:
   estimated pass duration (calls remaining ÷ concurrency × ~30s, generous),
   print a warning advising a `/login` first; `--yes`/interactive confirm to
   proceed anyway.
+- **No credential bytes at rest in scratch dirs:** the scratch config dir is
+  created with `mktemp -d` (mode 0700) and the credentials entry is a symlink
+  only. A hard kill (SIGKILL — EXIT traps don't fire) therefore orphans a
+  dangling pointer at worst, never a copy of the secret; access through the
+  symlink is still governed by the 0600 perms on the real file. This closes
+  the loose-credential-left-behind failure observed with the eval harness's
+  `cp` approach on 2026-06-11.
 - **401 = halt, never retry:** any judge call returning an auth error stops
   the WHOLE pass immediately (all workers drained, no refresh attempts —
   concurrent processes racing a single-use refresh token is what killed the
