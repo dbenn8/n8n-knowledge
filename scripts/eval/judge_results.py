@@ -96,3 +96,107 @@ def validate_verdict(v: dict, checklist_mode: bool) -> list[str]:
                 if not isinstance(c.get("met"), bool):
                     errors.append(f"criteria[{i}].met must be a boolean")
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Loaders & artifact gathering
+# ---------------------------------------------------------------------------
+
+def load_ground_truth(path: str) -> dict[int, dict]:
+    """Return {line_index -> entry} from ground_truth.jsonl."""
+    out: dict[int, dict] = {}
+    with open(path) as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if line:
+                out[i] = json.loads(line)
+    return out
+
+
+def load_by_prompt_idx(path: str) -> dict[int, dict]:
+    """Return {prompt_idx -> entry} from a JSONL file; {} if file absent."""
+    out: dict[int, dict] = {}
+    if not os.path.exists(path):
+        return out
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                e = json.loads(line)
+                out[e["prompt_idx"]] = e
+    return out
+
+
+def find_workflow(cond_dir: str, stem: str) -> tuple[str | None, str]:
+    """Return (workflow_text, source) with source in validated|candidate|written|missing."""
+    for suffix, source in ((".validated.workflow.json", "validated"),
+                           (".candidate.workflow.json", "candidate")):
+        p = os.path.join(cond_dir, stem + suffix)
+        if os.path.exists(p):
+            with open(p) as f:
+                return f.read(), source
+    written = sorted(glob.glob(os.path.join(cond_dir, stem + ".workflow", "*.json")))
+    if written:
+        with open(written[0]) as f:
+            return f.read(), "written"
+    return None, "missing"
+
+
+def load_validation_summary(cond_dir: str, stem: str) -> dict | None:
+    """Extract ONLY provenance-free fields from .validation.json.
+
+    The raw file contains enrichment_mode and absolute paths — provenance that
+    must never reach the (blinded) judge.
+    """
+    p = os.path.join(cond_dir, stem + ".validation.json")
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p) as f:
+            raw = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    return {"valid": bool(raw.get("valid")),
+            "error_count": int(raw.get("error_count") or 0),
+            "warning_count": int(raw.get("warning_count") or 0)}
+
+
+@dataclass
+class JudgeInput:
+    fileidx: int
+    stem: str
+    prompt_text: str
+    workflow_text: str | None
+    workflow_source: str
+    validation: dict | None
+    gotcha: dict | None
+    criteria: dict | None
+
+
+def gather_input(cond_dir: str, fileidx: int, run: str,
+                 ground_truth: dict[int, dict], rules: dict[int, dict],
+                 criteria: dict[int, dict]) -> JudgeInput:
+    stem = f"prompt-{fileidx:03d}-{run}"
+    workflow_text, source = find_workflow(cond_dir, stem)
+    gt = ground_truth.get(fileidx, {})
+    return JudgeInput(
+        fileidx=fileidx,
+        stem=stem,
+        prompt_text=gt.get("prompt", ""),
+        workflow_text=workflow_text,
+        workflow_source=source,
+        validation=load_validation_summary(cond_dir, stem),
+        gotcha=rules.get(fileidx),
+        criteria=criteria.get(fileidx),
+    )
+
+
+def discover_results(cond_dir: str) -> list[tuple[int, str]]:
+    """Return sorted [(fileidx, stem)] for every meta.json in a condition dir."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(cond_dir, "prompt-*-run*.meta.json"))):
+        stem = os.path.basename(p)[: -len(".meta.json")]
+        m = re.match(r"prompt-(\d+)-run\d+$", stem)
+        if m:
+            out.append((int(m.group(1)), stem))
+    return out

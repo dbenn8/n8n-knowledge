@@ -67,3 +67,104 @@ class TestValidateVerdict:
     def test_checklist_empty_list_rejected(self):
         v = dict(GOOD, criteria=[])
         assert any("criteria" in e for e in jr.validate_verdict(v, checklist_mode=True))
+
+
+# ---------------------------------------------------------------------------
+# Fixture: build a fake result tree
+# ---------------------------------------------------------------------------
+
+WORKFLOW = {"nodes": [{"name": "Slack", "type": "n8n-nodes-base.slack", "parameters": {}}], "connections": {}}
+
+
+def make_result_tree(tmp_path, condition="cond-a", fileidx=0, run="run01",
+                     validated=True, candidate=False, written=False,
+                     validation=True, valid=True):
+    """Create <tmp>/<condition>/prompt-NNN-runMM.* artifacts; return result dir."""
+    cond = tmp_path / condition
+    cond.mkdir(parents=True, exist_ok=True)
+    stem = f"prompt-{fileidx:03d}-{run}"
+    (cond / f"{stem}.meta.json").write_text(json.dumps(
+        {"condition": condition, "prompt_idx": fileidx, "run": 1}))
+    if validation:
+        (cond / f"{stem}.validation.json").write_text(json.dumps(
+            {"valid": valid, "error_count": 0 if valid else 3, "warning_count": 1,
+             "enrichment_mode": "plugin",
+             "validated_file": "/Users/secret/abs/path.json"}))
+    if validated:
+        (cond / f"{stem}.validated.workflow.json").write_text(json.dumps(WORKFLOW))
+    if candidate:
+        (cond / f"{stem}.candidate.workflow.json").write_text(json.dumps(WORKFLOW))
+    if written:
+        wdir = cond / f"{stem}.workflow"
+        wdir.mkdir(exist_ok=True)
+        (wdir / "my-flow.json").write_text(json.dumps(WORKFLOW))
+    return tmp_path
+
+
+def write_jsonl(path, entries):
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+
+GT = [
+    {"id": "p0", "prompt": "post a message to slack", "group": "a"},
+    {"id": "p1", "prompt": "send an email via gmail", "group": "b"},
+]
+RULES = [{"prompt_idx": 1, "prompt_id": "p1", "check_type": "llm_only",
+          "gotcha": "Gmail node breaks on X", "workaround": "Use HTTP Request with Bearer auth"}]
+
+
+class TestGathering:
+    def test_load_ground_truth_by_line_index(self, tmp_path):
+        gt_file = tmp_path / "gt.jsonl"
+        write_jsonl(gt_file, GT)
+        gt = jr.load_ground_truth(str(gt_file))
+        assert gt[0]["prompt"] == "post a message to slack"
+        assert gt[1]["id"] == "p1"
+
+    def test_load_by_prompt_idx(self, tmp_path):
+        f = tmp_path / "rules.jsonl"
+        write_jsonl(f, RULES)
+        rules = jr.load_by_prompt_idx(str(f))
+        assert rules[1]["gotcha"] == "Gmail node breaks on X"
+        assert jr.load_by_prompt_idx(str(tmp_path / "missing.jsonl")) == {}
+
+    def test_workflow_prefers_validated(self, tmp_path):
+        root = make_result_tree(tmp_path, validated=True, candidate=True, written=True)
+        text, source = jr.find_workflow(str(root / "cond-a"), "prompt-000-run01")
+        assert source == "validated" and json.loads(text)["nodes"]
+
+    def test_workflow_falls_back_to_candidate(self, tmp_path):
+        root = make_result_tree(tmp_path, validated=False, candidate=True, written=True)
+        _, source = jr.find_workflow(str(root / "cond-a"), "prompt-000-run01")
+        assert source == "candidate"
+
+    def test_workflow_falls_back_to_written(self, tmp_path):
+        root = make_result_tree(tmp_path, validated=False, candidate=False, written=True)
+        _, source = jr.find_workflow(str(root / "cond-a"), "prompt-000-run01")
+        assert source == "written"
+
+    def test_workflow_missing(self, tmp_path):
+        root = make_result_tree(tmp_path, validated=False)
+        text, source = jr.find_workflow(str(root / "cond-a"), "prompt-000-run01")
+        assert text is None and source == "missing"
+
+    def test_validation_summary_extracts_only_safe_fields(self, tmp_path):
+        root = make_result_tree(tmp_path)
+        s = jr.load_validation_summary(str(root / "cond-a"), "prompt-000-run01")
+        assert s == {"valid": True, "error_count": 0, "warning_count": 1}
+
+    def test_gather_input_full(self, tmp_path):
+        root = make_result_tree(tmp_path, fileidx=1)
+        gt = {i: e for i, e in enumerate(GT)}
+        rules = {1: RULES[0]}
+        ji = jr.gather_input(str(root / "cond-a"), 1, "run01", gt, rules, {})
+        assert ji.prompt_text == "send an email via gmail"
+        assert ji.workflow_source == "validated"
+        assert ji.gotcha["workaround"].startswith("Use HTTP Request")
+        assert ji.criteria is None
+
+    def test_discover_results(self, tmp_path):
+        root = make_result_tree(tmp_path, fileidx=0)
+        make_result_tree(tmp_path, fileidx=3)
+        found = jr.discover_results(str(root / "cond-a"))
+        assert found == [(0, "prompt-000-run01"), (3, "prompt-003-run01")]
