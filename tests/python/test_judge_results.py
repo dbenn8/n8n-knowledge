@@ -143,6 +143,20 @@ class TestGathering:
         _, source = jr.find_workflow(str(root / "cond-a"), "prompt-000-run01")
         assert source == "written"
 
+    def test_written_prefers_meta_workflow_filename(self, tmp_path):
+        root = make_result_tree(tmp_path, validated=False, written=True)
+        cond = root / "cond-a"
+        # a lexicographically-earlier decoy that must NOT be picked
+        (cond / "prompt-000-run01.workflow" / "aaa-decoy.json").write_text(
+            json.dumps({"nodes": [], "connections": {}}))
+        meta_path = cond / "prompt-000-run01.meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["workflow_filename"] = "my-flow.json"
+        meta_path.write_text(json.dumps(meta))
+        text, source = jr.find_workflow(str(cond), "prompt-000-run01")
+        assert source == "written"
+        assert json.loads(text)["nodes"], "must pick meta's workflow_filename, not the decoy"
+
     def test_workflow_missing(self, tmp_path):
         root = make_result_tree(tmp_path, validated=False)
         text, source = jr.find_workflow(str(root / "cond-a"), "prompt-000-run01")

@@ -135,7 +135,18 @@ def find_workflow(cond_dir: str, stem: str) -> tuple[str | None, str]:
         if os.path.exists(p):
             with open(p) as f:
                 return f.read(), source
-    written = sorted(glob.glob(os.path.join(cond_dir, stem + ".workflow", "*.json")))
+    wdir = os.path.join(cond_dir, stem + ".workflow")
+    meta_path = os.path.join(cond_dir, stem + ".meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path) as f:
+                named = json.load(f).get("workflow_filename")
+        except (json.JSONDecodeError, OSError):
+            named = None
+        if named and os.path.exists(os.path.join(wdir, named)):
+            with open(os.path.join(wdir, named)) as f:
+                return f.read(), "written"
+    written = sorted(glob.glob(os.path.join(wdir, "*.json")))
     if written:
         with open(written[0]) as f:
             return f.read(), "written"
