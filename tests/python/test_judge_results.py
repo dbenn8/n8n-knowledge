@@ -229,3 +229,26 @@ class TestBuildPrompt:
 
     def test_json_only_instruction(self):
         assert "single JSON object" in jr.build_prompt(_ji())
+
+    def test_checklist_states_must_rollup_rule(self):
+        crit = {"prompt_idx": 1, "must": ["uses gmail or http"], "nice": []}
+        p = jr.build_prompt(_ji(criteria=crit))
+        low = p.lower()
+        assert "every [must] criterion" in low
+        assert "[nice]" in p  # the rule must mention nice never affects intent_fit
+
+    def test_checklist_criterion_text_excludes_tag(self):
+        crit = {"prompt_idx": 1, "must": ["uses gmail or http"], "nice": ["retries"]}
+        p = jr.build_prompt(_ji(criteria=crit))
+        assert "without the [must]/[nice] tag" in p
+
+    def test_checklist_empty_nice_renders_musts_only(self):
+        crit = {"prompt_idx": 1, "must": ["uses gmail or http"], "nice": []}
+        p = jr.build_prompt(_ji(criteria=crit))
+        assert "- [must] uses gmail or http" in p
+        assert "- [nice]" not in p
+
+    def test_gotcha_schema_line_flips_to_pass_fail(self):
+        p = jr.build_prompt(_ji(gotcha=RULES[0]))
+        assert '"gotcha_handled": "pass" or "fail"' in p
+        assert "not_applicable" not in p

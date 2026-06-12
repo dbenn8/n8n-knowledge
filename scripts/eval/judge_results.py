@@ -270,9 +270,11 @@ def build_prompt(ji: JudgeInput) -> str:
             crit_lines += "\n" + "\n".join(f"- [nice] {c}" for c in nice)
         parts.append(
             "## Criteria checklist\nEvaluate each criterion against the "
-            "workflow and report it in a criteria array:\n" + crit_lines
+            "workflow and report it in a criteria array. Set intent_fit to "
+            "pass ONLY if every [must] criterion is met; [nice] criteria "
+            "never affect intent_fit:\n" + crit_lines
         )
-        schema_lines.append('"criteria": [{"criterion": "<text>", "met": true|false}, ...] (one entry per listed criterion, exact same text)')
+        schema_lines.append('"criteria": [{"criterion": "<the exact criterion text without the [must]/[nice] tag>", "met": true|false}, ...] (one entry per listed criterion)')
 
     parts.append(
         "## Your verdict\nRespond with a single JSON object and nothing else:\n"
