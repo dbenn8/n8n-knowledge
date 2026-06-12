@@ -148,7 +148,10 @@ EOF
 find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'n8n-eval-claude-config.*' -type d -mmin +180 -exec rm -rf {} + 2>/dev/null || true
 EVAL_SCRATCH_CONFIG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/n8n-eval-claude-config.XXXXXX")
 [ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$EVAL_SCRATCH_CONFIG_DIR/.claude.json"
-[ -f "$HOME/.claude/.credentials.json" ] && cp "$HOME/.claude/.credentials.json" "$EVAL_SCRATCH_CONFIG_DIR/.credentials.json"
+# Symlink (not copy) the credentials: OAuth tokens rotate mid-run, and a stale
+# copy 401s every session (observed 2026-06-12: token rotated 1 min after launch,
+# all 256 Sonnet sessions died). The scratch-dir cleanup only removes the link.
+[ -f "$HOME/.claude/.credentials.json" ] && ln -s "$HOME/.claude/.credentials.json" "$EVAL_SCRATCH_CONFIG_DIR/.credentials.json"
 export CLAUDE_CONFIG_DIR="$EVAL_SCRATCH_CONFIG_DIR"
 # Clean up credential copies on EVERY exit path we can trap. SIGKILL cannot be
 # trapped — the startup sweep below handles dirs stranded by a hard kill.
