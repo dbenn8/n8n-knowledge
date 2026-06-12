@@ -128,6 +128,25 @@ For each `prompt-XXX-runYY.json` under each condition dir:
 - The transcript is deliberately NOT included — the judge evaluates the
   artifact, not the chat's self-description, and it keeps calls cheap.
 
+## Auth handling (lessons from the 2026-06-12 OAuth incidents)
+
+The judge runs in the user's normal environment — no scratch HOME, no
+credential copying — so the stale-snapshot failure that 401'd an entire
+Sonnet eval arm (credentials `cp`'d at launch, token rotated a minute later)
+cannot occur here. Two residual risks are handled explicitly:
+
+- **Preflight expiry check:** before launching a pass, read
+  `~/.claude/.credentials.json` `expiresAt`. If the token expires within the
+  estimated pass duration (calls remaining ÷ concurrency × ~30s, generous),
+  print a warning advising a `/login` first; `--yes`/interactive confirm to
+  proceed anyway.
+- **401 = halt, never retry:** any judge call returning an auth error stops
+  the WHOLE pass immediately (all workers drained, no refresh attempts —
+  concurrent processes racing a single-use refresh token is what killed the
+  credential family on 2026-06-12). Completed verdicts are already on disk
+  (`.judge.json` cache), so after the user re-logs-in, rerunning the same
+  command resumes exactly where it stopped.
+
 ## Aggregation & output
 
 - `judge-summary.json` written at the result-dir root: per condition —
@@ -154,7 +173,10 @@ fixture verdicts/garbage):
 5. **Cache semantics:** existing `.judge.json` skipped; `--force` re-judges.
 6. **Aggregation math:** percentages, n/a exclusion from gotcha denominator,
    errors counted separately from fails.
-7. **Live smoke (manual gate):** judge 2–3 results from the 2026-06-12
+7. **Auth handling:** preflight expiry math (token expiring inside the
+   estimated window → warning path); a mocked 401 mid-pass halts all workers,
+   writes no partial verdict, and a rerun resumes from the cache.
+8. **Live smoke (manual gate):** judge 2–3 results from the 2026-06-12
    defaults smoke dir (`out/eval/20260612-075953-v2`) with real Opus before
    any full pass — orchestrator-run, with Dan's go-ahead per the standing
    eval-approval rule.
