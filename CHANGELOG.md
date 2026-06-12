@@ -11,6 +11,14 @@
 - Bash-triggered validation: removing the draft marker by any means now triggers validation via content-hash tracking — the Edit-tool recipe is a suggestion, not a requirement.
 - Stop-hook safety net: a session can no longer end with an unvalidated draft pending (capped at 2 nudges, fail-open).
 
+### LLM judge for eval results (`scripts/eval/judge_results.py`)
+- Post-hoc Opus judge scoring every eval result on intent fit and gotcha
+  coverage — two dimensions schema validation cannot measure.
+- Blinded (no condition/model provenance), fail-closed, verdicts cached as
+  `.judge.json`; per-prompt checklist upgrade via `judge_criteria.jsonl`.
+- Judge sessions run in an isolated scratch config (no plugins/hooks/MCP)
+  with credentials symlinked, never copied.
+
 ## 0.3.8 (2026-06-11)
 
 ### Validator warnings, smarter context injection, multi-node gotcha recall
