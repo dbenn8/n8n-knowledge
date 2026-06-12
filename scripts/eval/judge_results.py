@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -312,12 +313,14 @@ def make_scratch_config(creds_source: str | None = None) -> str:
 
 
 def cleanup_scratch_config(cfg: str) -> None:
-    """Remove the scratch dir without ever following the credentials symlink."""
-    for name in os.listdir(cfg):
-        p = os.path.join(cfg, name)
-        if os.path.islink(p) or os.path.isfile(p):
-            os.unlink(p)
-    os.rmdir(cfg)
+    """Remove the scratch dir without ever following the credentials symlink.
+
+    The claude CLI writes state subdirectories (projects/, sessions/,
+    backups/, ...) into its config dir during a pass, so removal must be
+    recursive. shutil.rmtree unlinks symlinks rather than descending into
+    them, so the live credentials file is never touched.
+    """
+    shutil.rmtree(cfg)
 
 
 def build_cmd(model: str, config_dir: str) -> tuple[list[str], dict]:

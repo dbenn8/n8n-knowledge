@@ -281,6 +281,15 @@ class TestIsolation:
         jr.cleanup_scratch_config(cfg)
         assert creds.read_text() == "SECRET"  # the real file survives cleanup
 
+    def test_cleanup_handles_cli_created_subdirs(self, tmp_path):
+        creds = tmp_path / ".credentials.json"
+        creds.write_text("SECRET")
+        cfg = jr.make_scratch_config(creds_source=str(creds))
+        os.makedirs(os.path.join(cfg, "projects", "deep"))
+        jr.cleanup_scratch_config(cfg)
+        assert not os.path.exists(cfg)
+        assert creds.read_text() == "SECRET"  # symlink target untouched
+
     def test_build_cmd_isolation_flags(self, tmp_path):
         creds = tmp_path / ".credentials.json"
         creds.write_text("{}")
