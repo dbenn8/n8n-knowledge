@@ -56,6 +56,14 @@ def main() -> int:
         all_runs = _all_runs(cond)
         all_vals = lambda k: [m[k] for m in all_runs if k in m]
 
+        def _median(vals):
+            vals = sorted(vals)
+            n = len(vals)
+            if not n:
+                return 0
+            mid = n // 2
+            return vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2
+
         validated = sum(1 for m in all_runs if m.get("_validation", {}).get("valid") is True)
         invalid = sum(1 for m in all_runs if m.get("_validation", {}).get("valid") is False)
         total = len(all_runs)
@@ -96,7 +104,14 @@ def main() -> int:
         gotcha_scored = g.get("scored", 0)
         gotcha_rate = (100.0 * gotcha_addr / gotcha_scored) if gotcha_scored else 0.0
 
+        med_cost_actual = _median(actual_vals) if actual_vals else None
+
         return {
+            "med_cost": _median(cost_vals),
+            "med_cost_actual": med_cost_actual,
+            "med_time": _median(time_vals),
+            "med_turns": _median(turn_vals),
+            "med_input": _median(input_vals),
             "validated_rate": validated / max(total, 1) * 100,
             "validated_runs": validated,
             "invalid_runs": invalid,
@@ -150,10 +165,15 @@ def main() -> int:
         ("Validated runs", "validated_runs", None, False),
         ("Invalid runs", "invalid_runs", None, False),
         ("Avg cost ($)", "cost_usd", "pct", True),
+        ("Med cost ($)", "med_cost", "pct", True),
         ("Avg cost actual ($)", "cost_usd_actual", "pct", True),
+        ("Med cost actual ($)", "med_cost_actual", "pct", True),
         ("Avg time (ms)", "time_ms", "pct", True),
+        ("Med time (ms)", "med_time", "pct", True),
         ("Avg turns", "num_turns", "pct", True),
+        ("Med turns", "med_turns", "pct", True),
         ("Avg total input tok", "total_input_tokens", "pct", True),
+        ("Med total input tok", "med_input", "pct", True),
         ("Avg output tokens", "output_tokens", None, False),
         ("Avg response (chars)", "response_chars", None, False),
         ("Error rate", "is_error", "pp", True),
@@ -177,7 +197,7 @@ def main() -> int:
                 if isinstance(raw, (int, float)) and isinstance(mcp_val, (int, float)):
                     delta = _delta_str(raw, mcp_val, delta_mode, lower_better)
 
-            if key == "cost_usd_actual":
+            if key in ("cost_usd_actual", "med_cost_actual"):
                 if raw is None:
                     cell = f"{'—':>14}"
                     delta = ""
@@ -191,9 +211,9 @@ def main() -> int:
                 cell = f"{raw:>13.1f}%"
             elif key == "gotcha_addressed_frac":
                 cell = f"{raw:>14}"
-            elif key == "cost_usd":
+            elif key in ("cost_usd", "med_cost"):
                 cell = f"${raw:>13.3f}"
-            elif key == "time_ms":
+            elif key in ("time_ms", "med_time"):
                 cell = f"{raw:>12.0f}ms"
             elif key == "validator_calls":
                 cell = f"{'—':>14}" if raw is None else f"{raw:>14.1f}"
