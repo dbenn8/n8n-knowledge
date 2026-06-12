@@ -69,10 +69,13 @@ For each `prompt-XXX-runYY.json` under each condition dir:
    - Original prompt text (from the result JSON's prompt field; fallback to
      the prompt source files by index).
    - Final workflow JSON: `*.validated.workflow.json`, fallback
-     `*.candidate.workflow.json`, fallback the `workflow` field in the result
-     JSON. Record which source was used.
-   - Validation status from `*.validation.json` (context only — the judge is
-     told validity does not imply intent fit).
+     `*.candidate.workflow.json`, fallback the model-written file(s) in the
+     `*.workflow/` directory. Record which source was used
+     (`validated | candidate | written`).
+   - Validation status from `*.validation.json` — extracted fields only
+     (`valid`, `error_count`, `warning_count`). The raw file leaks provenance
+     (`enrichment_mode`, absolute paths) and must never reach the judge.
+     Context only — the judge is told validity does not imply intent fit.
    - Matching `gotcha_rules.jsonl` rule by `prompt_idx` (its `gotcha` +
      `workaround` text), if any.
    - Matching `judge_criteria.jsonl` entry, if any → checklist mode.
@@ -98,7 +101,7 @@ For each `prompt-XXX-runYY.json` under each condition dir:
   "criteria": [{"criterion": "...", "met": true}],
   "confidence": "high | low",
   "judge_model": "opus",
-  "workflow_source": "validated | candidate | embedded",
+  "workflow_source": "validated | candidate | written",
   "judged_at": "ISO timestamp"
 }
 ```
