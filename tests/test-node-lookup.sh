@@ -136,6 +136,16 @@ cases.append(('F_clause_slack_action',
 cases.append(('F_sheets_alone_trigger',
     'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
 
+# Defect G: verb forms of node names must resolve to the node.
+# "merges" -> merge, "splits" -> split. The fuzzy fallback must also
+# respect _DEMOTED_BARE_TOKENS so "workflow" doesn't sneak through.
+cases.append(('G_merges_finds_merge',
+    'nodes-base.merge' in types('merges data from two different API sources')))
+cases.append(('G_merges_no_workflow',
+    'nodes-base.workflowTrigger' not in types('merges data from two different API sources')))
+cases.append(('G_splits_no_false_positive',
+    len(types('splits items into batches')) == 0))
+
 for name, ok in cases:
     print(f'{name}|{\"PASS\" if ok else \"FAIL\"}')
 " > "$TMPOUT2"

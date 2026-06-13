@@ -8,7 +8,7 @@ catalog.
 import json
 import os
 import re
-from difflib import get_close_matches
+from difflib import get_close_matches, SequenceMatcher
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _DATA = None
@@ -95,6 +95,11 @@ def _fuzzy_lookup(word, lookup, cutoff=0.85):
     if matches:
         return matches[0]
     return None
+
+
+def _similarity(a, b):
+    """Return a 0-1 similarity ratio between two strings (SequenceMatcher)."""
+    return SequenceMatcher(None, a, b).ratio()
 
 
 # Proximity window for trigger-intent scoping (in word tokens).
@@ -184,28 +189,43 @@ def identify_nodes(prompt):
             hits.append((name, nt))
             pl = re.sub(pattern, "", pl, count=1)
 
-    # Pass 2: fuzzy fallback for unmatched words (catches typos)
+    # Pass 2: fuzzy fallback for unmatched words (catches typos + verb forms)
     if not hits:
         words = re.findall(r"\b[a-z]{3,}\b", pl)
-        for word in words:
-            if word in _TRIGGER_WORDS:
+        for w in words:
+            if w in _COMMON_WORDS or w in _DEMOTED_BARE_TOKENS:
                 continue
-            matched_key = _fuzzy_lookup(word, lookup)
-            if matched_key:
-                nt = lookup[matched_key]
-                suffix = nt.split(".")[-1].lower()
-                base = re.sub(r"trigger$", "", suffix)
-                # Locate the fuzzy-matched word in the prompt to scope trigger
-                # intent to its span (fall back to no-trigger if not found).
-                wm = re.search(r"\b" + re.escape(word) + r"\b", pl)
-                local_trigger = (
-                    _trigger_word_near(pl, wm.start(), wm.end()) if wm else False
-                )
-                if not local_trigger and base in action and "trigger" in suffix:
-                    nt = action[base]
-                elif local_trigger and "trigger" not in suffix and suffix in trigger:
-                    nt = trigger[suffix]
-                hits.append((matched_key, nt))
+            # Strip common verb suffixes to match node names that are bare nouns
+            # (e.g. "merges" -> "merge", "splits" -> "split", "filtered" -> "filter").
+            stems = [w]
+            if w.endswith("es") and len(w) > 4:
+                stems.append(w[:-2])
+            if w.endswith("s") and len(w) > 3:
+                stems.append(w[:-1])
+            if w.endswith("ed") and len(w) > 4:
+                stems.append(w[:-2])
+            if w.endswith("ing") and len(w) > 5:
+                stems.append(w[:-3])
+            for stem in stems:
+                if stem in lookup:
+                    nt = lookup[stem]
+                    hits.append((stem, nt))
+                    break
+            if hits:
                 break
+            # Original fuzzy similarity check (for typos, min 4 chars)
+            if len(w) >= 4:
+                best, best_score = None, 0.0
+                for name in lookup:
+                    if len(name) < 4 or " " in name:
+                        continue
+                    if name in _COMMON_WORDS or name in _DEMOTED_BARE_TOKENS:
+                        continue
+                    ratio = _similarity(w, name)
+                    if ratio > best_score:
+                        best, best_score = name, ratio
+                if best_score >= 0.85:
+                    hits.append((best, lookup[best]))
+                    break
 
     return hits

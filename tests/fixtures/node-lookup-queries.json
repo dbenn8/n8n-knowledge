@@ -118,5 +118,7 @@
   {
     "query": "execute a workflow manually using the Manual Trigger",
     "expect": "nodes-base.manualTrigger"
-  }
+  },
+  {"query": "merges data from two different API sources", "expect": "nodes-base.merge"},
+  {"query": "build a workflow that splits items into batches", "expect": null}
 ]
