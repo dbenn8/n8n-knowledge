@@ -380,7 +380,7 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
       # auto-recall hook. Nothing plugin-specific lives in the prompt → no teaching-to-the-test.
       if [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-0}" = "1" ]; then
         plugin_env+=("CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true")
-        plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=${EVAL_PLUGIN_WORKFLOW_VALIDATION_MAX_CALLS:-3}")
+        plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=${EVAL_PLUGIN_WORKFLOW_VALIDATION_MAX_CALLS:-10}")
         plugin_env+=("N8N_KNOWLEDGE_AUTOFIX_LOG=${outfile%.json}.autofix.jsonl")
         rm -f "${outfile%.json}.autofix.jsonl"
         [ -n "${EVAL_PLUGIN_VALIDATOR_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORMODE=${EVAL_PLUGIN_VALIDATOR_MODE}")
