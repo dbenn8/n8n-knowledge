@@ -121,6 +121,43 @@ assert_not_contains "tie-break drops observation LOW result" "niche unsolved edg
 assert_contains "header explains result tags" "<result>" "$ctx"
 assert_contains "header has fetch nudge" "fetch a source URL" "$ctx"
 
+# --- GitHub base score threshold ---
+gh_bare_level=$(python3 -c "
+import sys; sys.path.insert(0,'$LIB_DIR')
+import format_results as fr
+cfg = fr.DEFAULTS
+r = {'type':'world','text':'Bug in node X','tags':['type:github-issue','source:github-issues'],
+     'metadata':{'state':'open','reactions_total':'0','comments':'0'}}
+level,_,_ = fr.score_result(r, cfg)
+print(level)
+")
+assert_eq "bare GitHub issue (no engagement) scores MEDIUM" "MEDIUM" "$gh_bare_level"
+
+# --- GitHub bug warning prefix ---
+gh_open_block=$(python3 -c "
+import sys; sys.path.insert(0,'$LIB_DIR')
+import format_results as fr
+cfg = fr.DEFAULTS
+r = {'type':'world','text':'OpenAI credential fails with setContentType error',
+     'tags':['type:github-issue','source:github-issues'],
+     'metadata':{'state':'open','reactions_total':'2','comments':'5',
+                 'url':'https://github.com/n8n-io/n8n/issues/31659'}}
+print(fr.render_result(1, r, 'HIGH', False, [], cfg))
+")
+assert_contains "open GitHub issue has bug warning" "KNOWN BUG" "$gh_open_block"
+
+gh_closed_block=$(python3 -c "
+import sys; sys.path.insert(0,'$LIB_DIR')
+import format_results as fr
+cfg = fr.DEFAULTS
+r = {'type':'world','text':'Fixed a typo in the docs',
+     'tags':['type:github-issue','source:github-issues'],
+     'metadata':{'state':'closed','state_reason':'completed','reactions_total':'0','comments':'1',
+                 'url':'https://github.com/n8n-io/n8n/issues/99999'}}
+print(fr.render_result(2, r, 'MEDIUM', False, [], cfg))
+")
+assert_not_contains "closed-completed GitHub issue has no bug warning" "KNOWN BUG" "$gh_closed_block"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
