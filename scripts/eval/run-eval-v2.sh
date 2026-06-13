@@ -376,7 +376,7 @@ enabled_plugins = clean_settings.get("enabledPlugins", {})
 empty_mcp_servers = empty_mcp.get("mcpServers", {})
 n8n_mcp_servers = n8n_mcp_config.get("mcpServers", {})
 
-plugin_validation_enabled = os.environ.get("EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION", "0") == "1"
+plugin_validation_enabled = os.environ.get("EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION", "1") == "1"
 plugin_validator_mode = os.environ.get("EVAL_PLUGIN_VALIDATOR_MODE", "").strip() or "default"
 plugin_validator_cloud = os.environ.get("EVAL_PLUGIN_VALIDATOR_CLOUD_URL", "").strip() or "<unset>"
 plugin_validator_local = os.environ.get("EVAL_PLUGIN_VALIDATOR_LOCAL_PATH", "").strip() or "<auto>"
@@ -522,7 +522,7 @@ echo "  Prompt ids: ${PROMPT_IDS:-<all in selected groups>}"
 echo "  Plugin validator: mode=${EVAL_PLUGIN_VALIDATOR_MODE:-default} cloud_url=${EVAL_PLUGIN_VALIDATOR_CLOUD_URL:-<unset>} local_path=${EVAL_PLUGIN_VALIDATOR_LOCAL_PATH:-<auto>}"
 if [ -n "${EVAL_SCORING_VALIDATOR_MODE:-}" ]; then
   scoring_mode_display="$EVAL_SCORING_VALIDATOR_MODE"
-elif [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-0}" = "1" ]; then
+elif [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-1}" = "1" ]; then
   scoring_mode_display="same-as-plugin"
 else
   scoring_mode_display="local"
@@ -715,7 +715,7 @@ invoke_model() {
   # loop). Scoring globs this folder for all conditions. It is NOT teaching-to-the-test:
   # it specifies WHERE to put output, not HOW to build a valid workflow.
   local run_system="$SYSTEM"
-  if [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-0}" = "1" ]; then
+  if [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-1}" = "1" ]; then
     wf_dir=$(python3 -c "import os,sys;print(os.path.abspath(sys.argv[1]))" "${outfile%.json}.workflow")
     rm -rf "$wf_dir"; mkdir -p "$wf_dir"
     run_system="${SYSTEM}
@@ -756,7 +756,7 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
       # condition-specific behavior comes from its real mechanism: hook-injected recall +
       # the validator loop (enabled via the env below) + generic build guidance from the
       # auto-recall hook. Nothing plugin-specific lives in the prompt → no teaching-to-the-test.
-      if [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-0}" = "1" ]; then
+      if [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-1}" = "1" ]; then
         plugin_env+=("CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true")
         plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=${EVAL_PLUGIN_WORKFLOW_VALIDATION_MAX_CALLS:-10}")
         plugin_env+=("N8N_KNOWLEDGE_AUTOFIX_LOG=${outfile%.json}.autofix.jsonl")
