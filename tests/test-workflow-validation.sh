@@ -12,7 +12,10 @@ mk_payload(){ python3 -c "import json,sys; print(json.dumps({'session_id':'valid
 
 TMPDIR_TEST=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_TEST"' EXIT
-STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+# Pin the per-user runtime dir under the test's tmp dir so validator session state is
+# hermetic (hook resolves $NK_STATE_DIR/workflow-validation from this override).
+export N8N_KNOWLEDGE_RUNTIME_DIR="$TMPDIR_TEST/runtime"
+STATE_DIR="$N8N_KNOWLEDGE_RUNTIME_DIR/state/workflow-validation"
 rm -f "$STATE_DIR/validator-test.json" "$STATE_DIR/validator-cap-test.json" "$STATE_DIR/validator-nonwf.json"
 
 WF="$TMPDIR_TEST/workflow.json"
@@ -75,9 +78,9 @@ assert_contains "enum error includes targeted replace guidance" "Replace only th
 SIDCAP="validator-cap-test"
 mk_payload_cap(){ python3 -c "import json,sys; print(json.dumps({'session_id':'$SIDCAP','cwd':'$SCRIPT_DIR/..','tool_name':sys.argv[1],'tool_input':{'file_path':sys.argv[2],'content':'x'}}))" "$1" "$2"; }
 rm -f "$STATE_DIR/${SIDCAP}.json"
-cap1=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=2 N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_MOCK" bash "$HOOK" <<< "$(mk_payload_cap Write "$WF")")
-cap2=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=2 N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_MOCK" bash "$HOOK" <<< "$(mk_payload_cap Write "$WF")")
-cap3=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=2 N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_MOCK" bash "$HOOK" <<< "$(mk_payload_cap Write "$WF")")
+cap1=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=static CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=2 N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_MOCK" bash "$HOOK" <<< "$(mk_payload_cap Write "$WF")")
+cap2=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=static CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=2 N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_MOCK" bash "$HOOK" <<< "$(mk_payload_cap Write "$WF")")
+cap3=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=static CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=2 N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$INVALID_MOCK" bash "$HOOK" <<< "$(mk_payload_cap Write "$WF")")
 assert_contains "cap first call injects" "hookSpecificOutput" "$cap1"
 assert_contains "cap second call injects" "hookSpecificOutput" "$cap2"
 assert_contains "cap third call warns" "Validator limit reached for this session" "$cap3"

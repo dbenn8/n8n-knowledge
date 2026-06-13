@@ -1,6 +1,6 @@
 # n8n Knowledge — Claude Code Plugin
 
-**v0.3.7**
+**v0.3.8**
 
 A Claude Code plugin that makes Claude better at n8n. When it detects you're working on
 n8n, hooks automatically recall curated n8n knowledge (docs, GitHub issues with status,
@@ -157,12 +157,12 @@ This is the trust section. Plainly:
   your machine and **no workflow JSON leaves it**.
 - **Nothing else.** No credentials, no file contents beyond the workflow JSON you asked it to
   validate, no telemetry.
-- **Debug log:** injected context is written locally to `/tmp/n8n-knowledge-debug.log` when
+- **Debug log:** injected context is written locally to `~/.cache/n8n-knowledge/debug.log` when
   `debugRecall` is `summary` (default) or `full`. Set it to `off` to disable. Inspect exactly
   what's being injected with:
 
   ```bash
-  tail -f /tmp/n8n-knowledge-debug.log
+  tail -f ~/.cache/n8n-knowledge/debug.log
   ```
 
 ## Self-hosting and escape hatches
@@ -225,7 +225,7 @@ not directly comparable to the v2 figures above.
 | `validatorMode` | `default` | Validator routing: `local`, `cloud`, or `default` (prefer local n8n-mcp, fall back to cloud). |
 | `validatorCloudUrl` | `""` | Cloud validator endpoint URL. |
 | `validatorLocalPath` | `""` | Override the local n8n-mcp install root (blank = auto-detect). |
-| `debugRecall` | `summary` | Local debug output to `/tmp/n8n-knowledge-debug.log`: `off`, `summary`, `full`. |
+| `debugRecall` | `summary` | Local debug output to `~/.cache/n8n-knowledge/debug.log`: `off`, `summary`, `full`. |
 
 > `enableSubagentInjection` exists but is **work-in-progress and unverified** — leave it off.
 
@@ -303,7 +303,7 @@ python3 hooks/lib/resolve_validator_target.py "$PWD"
 3. `node_lookup.py` identifies node names in the prompt for structured recall.
 4. `recall.sh` curls `/public/recall` (semantic); `structured_recall.sh` curls with tag filters (node specs).
 5. Results merged (node specs prepended), scored by `format_results.py`, and injected as `additionalContext`.
-6. Debug output written to `/tmp/n8n-knowledge-debug.log` unless `debugRecall` is `off`.
+6. Debug output written to `~/.cache/n8n-knowledge/debug.log` unless `debugRecall` is `off`.
 
 No MCP server. No daemon. No dependencies beyond bash, curl, and the Python stdlib.
 

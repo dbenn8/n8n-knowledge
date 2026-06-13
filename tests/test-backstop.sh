@@ -6,6 +6,13 @@ PASS=0; FAIL=0
 assert_contains(){ local d="$1" n="$2" h="$3"; if echo "$h"|grep -q "$n"; then echo "  PASS: $d"; PASS=$((PASS+1)); else echo "  FAIL: $d (want '$n')"; FAIL=$((FAIL+1)); fi; }
 assert_eq(){ local d="$1" e="$2" a="$3"; if [ "$e" = "$a" ]; then echo "  PASS: $d"; PASS=$((PASS+1)); else echo "  FAIL: $d (want '$e' got '$a')"; FAIL=$((FAIL+1)); fi; }
 
+# Pin the per-user runtime dir so backstop session state stays hermetic (the hook
+# resolves <runtime>/state/backstop from this override instead of ~/.cache or /tmp).
+RUNTIME_DIR_TEST=$(mktemp -d)
+export N8N_KNOWLEDGE_RUNTIME_DIR="$RUNTIME_DIR_TEST"
+BACKSTOP_STATE_DIR="$RUNTIME_DIR_TEST/state/backstop"
+trap 'rm -rf "$RUNTIME_DIR_TEST"' EXIT
+
 echo "=== backstop tests ==="
 
 # Task 1: do_recall accepts budget + max_tokens and builds the right payload.
@@ -94,7 +101,7 @@ assert_eq "query_window logic" "ok" "$qw"
 export RECALL_CLI_TEST=1
 export RECALL_FIXTURE="$SCRIPT_DIR/fixtures/recall-with-source-facts.json"
 SID="backstop-test-$$"
-rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID}.json"
+rm -f "$BACKSTOP_STATE_DIR/${SID}.json"
 mk(){ python3 -c "import json,sys; print(json.dumps({'session_id':'$SID','cwd':'$SCRIPT_DIR','tool_name':sys.argv[1],'tool_input':json.loads(sys.argv[2])}))" "$1" "$2"; }
 
 # First Edit touching n8n -> should inject (n8n keyword present so should_recall passes)
@@ -108,7 +115,7 @@ assert_eq "repeat topic injects nothing" "" "$out2"
 out3=$(echo "$(mk Read '{"file_path":"x.js"}')" | bash "$SCRIPT_DIR/../hooks/backstop-recall.sh")
 assert_eq "read tool injects nothing" "" "$out3"
 unset RECALL_CLI_TEST RECALL_FIXTURE
-rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID}.json"
+rm -f "$BACKSTOP_STATE_DIR/${SID}.json"
 
 # Task 9: registration + config present.
 hj=$(cat "$SCRIPT_DIR/../hooks/hooks.json")
@@ -122,7 +129,7 @@ assert_contains "config triggerKeywords" "triggerKeywords" "$pj"
 # Task 10: subagent injection gated; when enabled, prepends block to prompt.
 export RECALL_CLI_TEST=1
 export RECALL_FIXTURE="$SCRIPT_DIR/fixtures/recall-with-source-facts.json"
-SID2="backstop-sub-$$"; rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID2}.json"
+SID2="backstop-sub-$$"; rm -f "$BACKSTOP_STATE_DIR/${SID2}.json"
 payload=$(python3 -c "import json;print(json.dumps({'session_id':'$SID2','cwd':'$SCRIPT_DIR','tool_name':'Task','tool_input':{'description':'n8n','prompt':'build an n8n webhook workflow'}}))")
 # disabled (default) -> no updatedInput
 off=$(echo "$payload" | bash "$SCRIPT_DIR/../hooks/backstop-subagent.sh")
@@ -132,7 +139,7 @@ on=$(echo "$payload" | CLAUDE_PLUGIN_OPTION_ENABLESUBAGENTINJECTION=true bash "$
 assert_contains "enabled returns updatedInput" "updatedInput" "$on"
 assert_contains "updatedInput carries result block" "<result" "$on"
 unset RECALL_CLI_TEST RECALL_FIXTURE
-rm -f "${TMPDIR:-/tmp}/n8n-knowledge-backstop/${SID2}.json"
+rm -f "$BACKSTOP_STATE_DIR/${SID2}.json"
 
 echo ""; echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1

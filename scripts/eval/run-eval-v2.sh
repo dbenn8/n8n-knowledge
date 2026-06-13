@@ -143,11 +143,24 @@ EOF
 # Auth is seeded by copying credential files by path (never printed). The dir
 # lives OUTSIDE the repo tree and is removed on exit so credential copies can
 # never be committed.
+# Startup sweep: remove scratch dirs stranded by previously hard-killed runs.
+# Age-gated (>3h) so a concurrently RUNNING harness's fresh dir is never swept.
+find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'n8n-eval-claude-config.*' -type d -mmin +180 -exec rm -rf {} + 2>/dev/null || true
 EVAL_SCRATCH_CONFIG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/n8n-eval-claude-config.XXXXXX")
 [ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$EVAL_SCRATCH_CONFIG_DIR/.claude.json"
-[ -f "$HOME/.claude/.credentials.json" ] && cp "$HOME/.claude/.credentials.json" "$EVAL_SCRATCH_CONFIG_DIR/.credentials.json"
+# Symlink (not copy) the credentials: OAuth tokens rotate mid-run, and a stale
+# copy 401s every session (observed 2026-06-12: token rotated 1 min after launch,
+# all 256 Sonnet sessions died). The scratch-dir cleanup only removes the link.
+[ -f "$HOME/.claude/.credentials.json" ] && ln -s "$HOME/.claude/.credentials.json" "$EVAL_SCRATCH_CONFIG_DIR/.credentials.json"
 export CLAUDE_CONFIG_DIR="$EVAL_SCRATCH_CONFIG_DIR"
-trap 'rm -rf "$EVAL_SCRATCH_CONFIG_DIR"' EXIT
+# Clean up credential copies on EVERY exit path we can trap. SIGKILL cannot be
+# trapped — the startup sweep below handles dirs stranded by a hard kill.
+cleanup_scratch_config() { rm -rf "$EVAL_SCRATCH_CONFIG_DIR"; }
+trap cleanup_scratch_config EXIT
+# On INT/TERM the cleanup runs twice (signal handler + the EXIT trap that fires
+# on the handler's own `exit`); rm -rf is idempotent, so the double call is safe.
+trap 'cleanup_scratch_config; exit 130' INT
+trap 'cleanup_scratch_config; exit 143' TERM
 
 describe_condition_isolation() {
   local cond="$1"
@@ -373,6 +386,8 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
         [ -n "${EVAL_PLUGIN_VALIDATOR_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORMODE=${EVAL_PLUGIN_VALIDATOR_MODE}")
         [ -n "${EVAL_PLUGIN_VALIDATOR_CLOUD_URL:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORCLOUDURL=${EVAL_PLUGIN_VALIDATOR_CLOUD_URL}")
         [ -n "${EVAL_PLUGIN_VALIDATOR_LOCAL_PATH:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORLOCALPATH=${EVAL_PLUGIN_VALIDATOR_LOCAL_PATH}")
+        [ -n "${EVAL_PLUGIN_WORKFLOW_EDIT_STYLE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE=${EVAL_PLUGIN_WORKFLOW_EDIT_STYLE}")
+        [ -n "${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE}")
       fi
       plugin_cmd=(
         claude -p "$prompt" --output-format json --system-prompt "$run_system"
@@ -721,15 +736,22 @@ try:
             + out_tok * out_rate
         ) / 1_000_000
     # In-session validator call count (plugin only): the PostToolUse hook tracks
-    # calls per session_id in a TMPDIR state file. Read it via the session_id
-    # in the response payload so the summary can report validator-budget usage.
+    # calls per session_id in a per-user runtime state file. Read it via the
+    # session_id in the response payload so the summary can report validator-budget
+    # usage. Path mirrors runtime_dirs.py: <runtime>/state/workflow-validation/<sid>.json
+    # where runtime = N8N_KNOWLEDGE_RUNTIME_DIR, else (XDG_CACHE_HOME or ~/.cache)/n8n-knowledge.
     validator_calls = None
     try:
         sid = d.get('session_id', '')
         if sid:
+            runtime = (
+                os.environ.get('N8N_KNOWLEDGE_RUNTIME_DIR')
+                or os.path.join(
+                    os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'),
+                    'n8n-knowledge')
+            )
             state_path = os.path.join(
-                os.environ.get('TMPDIR', '/tmp'),
-                'n8n-knowledge-workflow-validation', sid + '.json')
+                runtime, 'state', 'workflow-validation', sid + '.json')
             if os.path.exists(state_path):
                 validator_calls = int(json.load(open(state_path)).get('calls', 0))
     except Exception:

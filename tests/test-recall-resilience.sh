@@ -121,7 +121,7 @@ else
   fail "C4: format_results.py exited nonzero on empty payload (rc=${E_RC:-?})"
 fi
 
-# --- C5 (old): format_results.py degrades to exit 0 on a non-JSON (garbage) payload ---
+# --- C5: format_results.py degrades to exit 0 on a non-JSON (garbage) payload ---
 python3 "$FORMAT_PY" "$GARBAGE_FILE" "" >/dev/null 2>&1 && G_RC=0 || G_RC=$?
 if [ "${G_RC:-1}" -eq 0 ]; then
   pass "C5: format_results.py exits 0 on a non-JSON payload"

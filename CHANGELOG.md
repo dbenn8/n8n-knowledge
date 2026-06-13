@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Surgical-edit repair mode (now the default)
+- New `workflowEditStyle` option (`rewrite` | `surgical`). In surgical mode, INVALID validator feedback instructs the model to patch only the failing nodes via a scripted JSON edit and a `!!DRAFT!!` draft marker, instead of regenerating the whole file — cutting output tokens on large-workflow repair rounds by ~99% per fix.
+- The validation hook skips files whose first line is `!!DRAFT!!` (work-in-progress drafts): no validation, no budget charge, in all modes.
+- `workflowEditStyle` now defaults to `surgical` and `workflowValidationBudgetMode` defaults to `adaptive`, validated by a full 128-prompt A+B+C run (plugin 84.4% vs MCP 80.5% validated, -24% cost, -31% input tokens). Set `rewrite`/`static` to restore the previous behavior.
+- Adaptive validation budget: only stagnant repair rounds spend budget — rounds that reduce the error count are free (hard ceiling of 3x max-calls).
+- Stagnation failover: after two consecutive non-improving surgical rounds, feedback flips to one-full-rewrite guidance; errors without resolvable patch targets get node-level rewrite hints.
+- Bash-triggered validation: removing the draft marker by any means now triggers validation via content-hash tracking — the Edit-tool recipe is a suggestion, not a requirement.
+- Stop-hook safety net: a session can no longer end with an unvalidated draft pending (capped at 2 nudges, fail-open).
+
+### LLM judge for eval results (`scripts/eval/judge_results.py`)
+- Post-hoc Opus judge scoring every eval result on intent fit and gotcha
+  coverage — two dimensions schema validation cannot measure.
+- Blinded (no condition/model provenance), fail-closed, verdicts cached as
+  `.judge.json`; per-prompt checklist upgrade via `judge_criteria.jsonl`.
+- Judge sessions run in an isolated scratch config (no plugins/hooks/MCP)
+  with credentials symlinked, never copied.
+
 ## 0.3.8 (2026-06-11)
 
 ### Validator warnings, smarter context injection, multi-node gotcha recall
@@ -12,6 +31,7 @@
 - Local validator suppresses false positives on dynamically loaded option lists and expression values.
 - The deep-search skill is now model-invocable and teaches validation-budget discipline.
 - Eval harness: per-run isolated config dirs, optional transcript preservation, targeted prompt selection, validator call-count reporting.
+- State and debug log moved from /tmp to ~/.cache/n8n-knowledge (0700 dir, 0600 log). Set N8N_KNOWLEDGE_RUNTIME_DIR to override. Old /tmp files are no longer read; delete them manually if present.
 
 ## 0.3.7 (2026-06-11)
 

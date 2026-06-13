@@ -2,9 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/runtime_dirs.sh"
 source "$SCRIPT_DIR/lib/detect-n8n.sh"
 source "$SCRIPT_DIR/lib/recall.sh"
 source "$SCRIPT_DIR/lib/structured_recall.sh"
+
+# Resolve + export NK_RUNTIME_DIR/NK_DEBUG_LOG/NK_STATE_DIR (per-user, 0700).
+# The debug log contains prompt text, so it must NOT live in world-readable /tmp.
+nk_runtime_init
 
 # Build the workflow-validation build instructions (empty unless validation is enabled).
 # Kept as a function so it can be injected on BOTH the recall-fired and recall-skipped
@@ -40,10 +45,13 @@ if [ "$RECALL_DECISION" != "yes" ]; then
   DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
   if [ "$DEBUG" != "off" ]; then
     python3 -c "
-import sys, datetime
+import sys, os, datetime
 sys.path.insert(0, '$SCRIPT_DIR/lib')
+import runtime_dirs
+debug_log = os.environ.get('NK_DEBUG_LOG') or runtime_dirs.debug_log_path()
+os.umask(0o077)  # debug log holds prompt text — owner-only (0600), matches nk_debug_log_write
 prompt_preview = sys.argv[1][:80].replace('\n', ' ')
-with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
+with open(debug_log, 'a') as f:
     f.write(f'[{datetime.datetime.now().strftime(\"%H:%M:%S\")}] auto-recall SKIP | prompt: {prompt_preview!r}\n')
 " "$PROMPT" 2>/dev/null || true
   fi
@@ -104,10 +112,16 @@ if [ -n "$NODE_TYPE" ]; then
 import glob, json, sys
 combined, seen = [], set()
 buckets = []
+merged_sf = {}
 for path in sorted(glob.glob(sys.argv[1] + '/*.json')):
     try:
         with open(path) as f:
-            buckets.append(json.load(f).get('results', []))
+            doc = json.load(f)
+        buckets.append(doc.get('results', []))
+        # Accumulate the per-node source_facts dict so observation provenance
+        # (URLs/engagement) survives the gotcha combine — the renderer resolves
+        # source_fact_ids against this merged dict.
+        merged_sf.update(doc.get('source_facts') or {})
     except Exception:
         pass
 i = 0
@@ -121,7 +135,7 @@ while len(combined) < 5 and any(len(b) > i for b in buckets):
             if len(combined) >= 5:
                 break
     i += 1
-json.dump({'results': combined}, open(sys.argv[2], 'w'))
+json.dump({'results': combined, 'source_facts': merged_sf}, open(sys.argv[2], 'w'))
 " "$GOTCHA_MULTI_DIR" "$GOTCHA_TMPFILE" 2>/dev/null || true
 
   # Merge: gotchas FIRST (highest priority), then semantic, then capped node specs.
@@ -139,11 +153,22 @@ def load_results(path):
         return {}
 
 sem = load_results(sys.argv[1])
-struct_results = load_results(sys.argv[2]).get('results', [])[:5]
-gotcha_results = load_results(sys.argv[3]).get('results', [])[:5]
+struct_doc = load_results(sys.argv[2])
+gotcha_doc = load_results(sys.argv[3])
+struct_results = struct_doc.get('results', [])[:5]
+gotcha_results = gotcha_doc.get('results', [])[:5]
 sem_results = sem.get('results', [])
 # Order: gotchas (bugs/issues) → semantic (docs/community) → node specs (reference)
 sem['results'] = gotcha_results + sem_results + struct_results
+# Merge source_facts across all three streams so observations arriving via the
+# gotcha/structured channels keep their provenance (URLs/engagement). Semantic
+# wins key collisions (ids are UUIDs — collisions are theoretical). A dead
+# stream contributes an empty dict, so the per-stream tolerance is preserved.
+sem['source_facts'] = {
+    **(struct_doc.get('source_facts') or {}),
+    **(gotcha_doc.get('source_facts') or {}),
+    **(sem.get('source_facts') or {}),
+}
 with open(sys.argv[1], 'w') as f:
     json.dump(sem, f)
 " "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE" 2>/dev/null || true
@@ -183,13 +208,16 @@ fi
 
 # Debug mode: off, summary (default — condensed), full (complete with formatting)
 # Runs AFTER DB inject merge so log reflects what Claude actually receives.
-# Output written to /tmp/n8n-knowledge-debug.log — tail -f in another terminal to watch
+# Output written to $NK_DEBUG_LOG (~/.cache/n8n-knowledge/debug.log) — tail -f in another terminal to watch
 DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
 if [ "$DEBUG" != "off" ] && [ -n "$RESULT" ]; then
   echo "$RESULT" | python3 -c "
-import json, sys
+import json, sys, os
 sys.path.insert(0, '$SCRIPT_DIR/lib')
+import runtime_dirs
 from debug_formatter import format_debug
+debug_log = os.environ.get('NK_DEBUG_LOG') or runtime_dirs.debug_log_path()
+os.umask(0o077)  # debug log holds prompt/context text — owner-only (0600)
 data = json.load(sys.stdin)
 ctx = data.get('hookSpecificOutput', {}).get('additionalContext', '')
 if ctx:
@@ -201,7 +229,7 @@ if ctx:
     else:
         db_chars = 0
     summary_line = f'[ctx={len(ctx)}chars, db_inject={has_db}, db_chars={db_chars}]\n'
-    with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
+    with open(debug_log, 'a') as f:
         f.write(summary_line)
         f.write(format_debug(ctx, '$DEBUG', 'auto-recall'))
 " 2>/dev/null || true

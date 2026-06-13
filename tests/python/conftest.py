@@ -15,3 +15,8 @@ _LIB_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "hooks", "lib"))
 
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
+
+_EVAL_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "scripts", "eval"))
+
+if _EVAL_DIR not in sys.path:
+    sys.path.insert(0, _EVAL_DIR)

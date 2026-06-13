@@ -5,6 +5,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
+source "$LIB_DIR/runtime_dirs.sh"
+# Per-user runtime paths: session validator state lives under ~/.cache (0700), not /tmp.
+nk_runtime_init
 
 [ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-false}" = "true" ] || exit 0
 
@@ -14,9 +17,59 @@ read_field(){ printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys
 SID=$(read_field session_id)
 TOOL=$(read_field tool_name)
 CWD=$(read_field cwd)
-[ "$TOOL" = "Edit" ] || [ "$TOOL" = "Write" ] || exit 0
 
-FILE_PATH=$(printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys.stdin);ti=d.get('tool_input',{}) or {};print(ti.get('file_path',''))" 2>/dev/null)
+CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
+EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-surgical}"
+BUDGET_MODE="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE:-adaptive}"
+STATE_DIR="$NK_STATE_DIR/workflow-validation"
+
+# Resolve the file to validate based on the tool event.
+# - Edit/Write: the file_path the model just wrote.
+# - Bash: validation is triggered by STATE CHANGE, not tool choice. The
+#   surgical-edit recipe asks the model to remove the !!DRAFT!! marker with the
+#   Edit tool (only Edit/Write watched), but models sometimes strip it via Bash.
+#   So on a Bash event we look up the pending draft recorded in session state and
+#   validate it IFF: it still exists, is now markerless, and its content hash
+#   changed since the last validation. An unchanged or marker-bearing draft costs
+#   nothing — this gate runs BEFORE the budget block.
+# - Any other tool: nothing to do.
+if [ "$TOOL" = "Edit" ] || [ "$TOOL" = "Write" ]; then
+  FILE_PATH=$(printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys.stdin);ti=d.get('tool_input',{}) or {};print(ti.get('file_path',''))" 2>/dev/null)
+elif [ "$TOOL" = "Bash" ]; then
+  [ -n "$SID" ] || exit 0
+  FILE_PATH=$(python3 - "$STATE_DIR" "$SID" 2>/dev/null << 'PYEOF'
+import hashlib
+import json
+import os
+import sys
+
+state_dir, sid = sys.argv[1], sys.argv[2]
+path = os.path.join(state_dir, f"{sid}.json")
+try:
+    state = json.load(open(path))
+    if not isinstance(state, dict):
+        raise SystemExit(0)
+except Exception:
+    raise SystemExit(0)
+
+dp = state.get("draft_pending")
+if not dp or not os.path.exists(dp):
+    raise SystemExit(0)
+try:
+    data = open(dp, "rb").read()
+except Exception:
+    raise SystemExit(0)
+if data.startswith(b"!!DRAFT!!"):
+    raise SystemExit(0)
+if hashlib.sha256(data).hexdigest() == state.get("last_validated_hash"):
+    raise SystemExit(0)
+print(dp)
+PYEOF
+) || exit 0
+  [ -n "$FILE_PATH" ] || exit 0
+else
+  exit 0
+fi
 [ -n "$FILE_PATH" ] || exit 0
 [ -f "$FILE_PATH" ] || exit 0
 
@@ -25,29 +78,131 @@ case "$FILE_PATH" in
   *) exit 0 ;;
 esac
 
-CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-3}"
-STATE_DIR="${TMPDIR:-/tmp}/n8n-knowledge-workflow-validation"
+# Surgical-edit draft marker: a file whose first line is the literal !!DRAFT!!
+# is a work-in-progress draft (the model is mid-surgical-edit via Bash). Skip
+# silently — no validation, no budget charge. The model deletes the marker via
+# the Edit tool when done; THAT Edit triggers validation of the final state.
+DRAFT_MARKER='!!DRAFT!!'
+case "$(head -c 9 "$FILE_PATH" 2>/dev/null)" in
+  "$DRAFT_MARKER") exit 0 ;;
+esac
+
+# Best-effort draft_pending bookkeeping (Task 4b Stop-hook safety net). Failures
+# must never affect hook output or exit status. ACTION: set|clear|hash.
+# Every action ALSO records the content hash of the just-validated file into
+# last_validated_hash (Task 4c) so a later Bash event can tell whether the draft
+# actually changed. 'hash' only updates the hash (no draft_pending change).
+update_draft_pending() {
+  # $1 = action (set|clear|hash)
+  [ -n "$SID" ] || return 0
+  python3 - "$STATE_DIR" "$SID" "$1" "$FILE_PATH" 2>/dev/null << 'PYEOF' || true
+import hashlib, json, os, sys
+state_dir, sid, action, file_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+path = os.path.join(state_dir, f"{sid}.json")
+try:
+    state = json.load(open(path))
+    if not isinstance(state, dict):
+        state = {}
+except Exception:
+    state = {}
+if action == "set":
+    state["draft_pending"] = file_path
+elif action == "clear":
+    state.pop("draft_pending", None)
+# All actions record the freshly-validated content hash. This helper runs after
+# any autofix copy-back, so reading the file now captures the post-fix bytes. If
+# the file can't be read, leave any previous hash untouched.
+try:
+    state["last_validated_hash"] = hashlib.sha256(open(file_path, "rb").read()).hexdigest()
+except Exception:
+    pass
+with open(path, "w") as f:
+    json.dump(state, f)
+PYEOF
+}
+# Best-effort adaptive stagnation accounting (Task 4d). Runs ONLY in adaptive
+# budget mode, after a validation result is known. An INVALID round that strictly
+# reduced the error count vs the previous round (or the first round) is "free":
+# stagnant is unchanged. A non-improving INVALID round adds a stagnation strike.
+# Always records last_error_count. Failures never affect hook output or exit.
+update_stagnation() {
+  # $1 = VALID flag ("true"/"false"); reads RESULT_JSON from env.
+  [ "$BUDGET_MODE" = "adaptive" ] || return 0
+  [ -n "$SID" ] || return 0
+  RESULT_JSON="$RESULT" VALID_FLAG="$1" python3 - "$STATE_DIR" "$SID" 2>/dev/null << 'PYEOF' || true
+import json, os, sys
+state_dir, sid = sys.argv[1], sys.argv[2]
+path = os.path.join(state_dir, f"{sid}.json")
+try:
+    state = json.load(open(path))
+    if not isinstance(state, dict):
+        state = {}
+except Exception:
+    state = {}
+try:
+    result = json.loads(os.environ.get("RESULT_JSON") or "{}")
+except Exception:
+    result = {}
+valid = os.environ.get("VALID_FLAG") == "true"
+# Materialize the strike counters so downstream reads see an explicit 0 rather
+# than a missing key. Improving / first rounds leave 'stagnant' at its current
+# value but RESET 'consec_stagnant' to 0 (Task 4e failover tracking).
+state["stagnant"] = int(state.get("stagnant", 0))
+state["consec_stagnant"] = int(state.get("consec_stagnant", 0))
+if not valid:
+    new_ec = int(result.get("error_count", 0) or 0)
+    prev = state.get("last_error_count")
+    if prev is None:
+        # First / baseline INVALID round: no improvement comparison possible.
+        state["consec_stagnant"] = 0
+    else:
+        try:
+            if new_ec >= int(prev):
+                # Non-improving round: total strike + consecutive strike.
+                state["stagnant"] = int(state.get("stagnant", 0)) + 1
+                state["consec_stagnant"] = int(state.get("consec_stagnant", 0)) + 1
+            else:
+                # Improving round: consecutive streak breaks.
+                state["consec_stagnant"] = 0
+        except (TypeError, ValueError):
+            pass
+    state["last_error_count"] = new_ec
+with open(path, "w") as f:
+    json.dump(state, f)
+PYEOF
+}
+
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 if [ -n "$SID" ]; then
-  SHOULD_VALIDATE=$(python3 - "$STATE_DIR" "$SID" "$CAP" 2>/dev/null << 'PYEOF'
+  SHOULD_VALIDATE=$(python3 - "$STATE_DIR" "$SID" "$CAP" "$BUDGET_MODE" 2>/dev/null << 'PYEOF'
 import json
 import os
 import sys
 
-state_dir, sid, cap = sys.argv[1], sys.argv[2], int(sys.argv[3])
+state_dir, sid, cap, budget_mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 path = os.path.join(state_dir, f"{sid}.json")
 state = {"calls": 0}
 if os.path.exists(path):
     try:
         state = json.load(open(path))
+        if not isinstance(state, dict):
+            state = {"calls": 0}
     except Exception:
         state = {"calls": 0}
 
 calls = int(state.get("calls", 0))
-if calls >= cap:
-    print("cap_reached")
-    raise SystemExit(0)
+if budget_mode == "adaptive":
+    # Adaptive: only stagnant rounds spend budget. Gate on stagnant strikes
+    # (updated post-validation) and a hard ceiling of cap*3 total calls.
+    stagnant = int(state.get("stagnant", 0))
+    if stagnant >= cap or calls >= cap * 3:
+        print("cap_reached")
+        raise SystemExit(0)
+else:
+    if calls >= cap:
+        print("cap_reached")
+        raise SystemExit(0)
 
 state["calls"] = calls + 1
 with open(path, "w") as f:
@@ -107,8 +262,18 @@ if [ "$VALID" = "false" ]; then
   fi
 fi
 
+# Adaptive stagnation accounting (no-op in static mode). Runs BEFORE feedback
+# emission so the INVALID feedback can show the updated stagnant count.
+update_stagnation "$VALID"
+STAGNANT_USED="0"
+CONSEC_STAGNANT="0"
+if [ "$BUDGET_MODE" = "adaptive" ] && [ -n "$SID" ]; then
+  STAGNANT_USED=$(python3 -c "import json,sys;print(int(json.load(open(sys.argv[1])).get('stagnant',0)))" "$STATE_DIR/$SID.json" 2>/dev/null) || STAGNANT_USED="0"
+  CONSEC_STAGNANT=$(python3 -c "import json,sys;print(int(json.load(open(sys.argv[1])).get('consec_stagnant',0)))" "$STATE_DIR/$SID.json" 2>/dev/null) || CONSEC_STAGNANT="0"
+fi
+
 if [ "$VALID" = "true" ]; then
-  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" CALLS_USED="$CALLS_USED" CAP="$CAP" python3 - 2>/dev/null << 'PYEOF'
+  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" CALLS_USED="$CALLS_USED" CAP="$CAP" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -121,13 +286,23 @@ trigger_count = result.get("trigger_count", 0)
 auto_changes = autofix.get("changes") or []
 calls_used = os.environ.get("CALLS_USED", "?")
 cap = os.environ.get("CAP", "?")
+budget_mode = os.environ.get("BUDGET_MODE", "adaptive")
+stagnant_used = os.environ.get("STAGNANT_USED", "0")
 warnings_block = (result.get("warnings_block") or "").strip()
+
+if budget_mode == "adaptive":
+    budget_line = (
+        f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used; "
+        f"{calls_used} total calls."
+    )
+else:
+    budget_line = f"Validator budget: {calls_used} of {cap} calls used this session."
 
 header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
-    f"Validator budget: {calls_used} of {cap} calls used this session.",
+    budget_line,
     f"Validation passed. Nodes: {node_count}. Trigger nodes: {trigger_count}.",
 ]
 if auto_changes:
@@ -149,6 +324,8 @@ PYEOF
   [ -n "$OK_CTX" ] || exit 0
   OK_OUTPUT=$(python3 "$LIB_DIR/hook_json.py" emit PostToolUse "$OK_CTX" 2>/dev/null) || exit 0
   echo "$OK_OUTPUT"
+  # Validation passed for this file: clear any stuck-draft pending state.
+  update_draft_pending clear
   exit 0
 fi
 
@@ -191,7 +368,7 @@ if db_types:
 PYEOF
 )
 
-CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" python3 - 2>/dev/null << 'PYEOF'
+CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" NODE_SPECS="$NODE_SPEC_BLOCK" CALLS_USED="$CALLS_USED" CAP="$CAP" EDIT_STYLE="$EDIT_STYLE" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" CONSEC_STAGNANT="$CONSEC_STAGNANT" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -205,6 +382,12 @@ auto_changes = autofix.get("changes") or []
 node_specs = os.environ.get("NODE_SPECS", "").strip()
 calls_used = os.environ.get("CALLS_USED", "?")
 cap = os.environ.get("CAP", "?")
+budget_mode = os.environ.get("BUDGET_MODE", "adaptive")
+stagnant_used = os.environ.get("STAGNANT_USED", "0")
+try:
+    consec_stagnant = int(os.environ.get("CONSEC_STAGNANT", "0") or "0")
+except ValueError:
+    consec_stagnant = 0
 try:
     remaining = max(0, int(cap) - int(calls_used))
 except ValueError:
@@ -213,12 +396,61 @@ warnings_block = (result.get("warnings_block") or "").strip()
 if not feedback:
     raise SystemExit(1)
 
+edit_style = os.environ.get("EDIT_STYLE", "surgical")
+
+# Surgical-style recipe (default surgical guidance). When the model is
+# demonstrably stuck — two or more consecutive non-improving surgical rounds —
+# flip strategy: stop surgical edits and demand ONE full rewrite (Task 4e). A
+# full regeneration incidentally clears errors the model cannot surgically
+# locate. The rewrite path wants a Write (which triggers validation directly),
+# so the !!DRAFT!! marker instructions are intentionally omitted here.
+if edit_style == "surgical" and consec_stagnant >= 2:
+    surgical_guidance = (
+        f"STRATEGY CHANGE — {consec_stagnant} surgical rounds in a row have not "
+        "reduced the error count. Stop surgical edits. Do ONE complete rewrite of "
+        "the file now: use the Write tool with the full corrected workflow JSON, "
+        "fixing ALL errors listed below in a single pass. After the rewrite, if any "
+        "errors remain, resume small surgical fixes."
+    )
+else:
+    surgical_guidance = (
+        "Fix via SURGICAL EDITS — do NOT rewrite the file; rewrites waste tokens and time. Recipe:\n"
+        "  1. Run ONE Bash python3 script that loads the JSON file at the path above, applies "
+        "EVERY fix listed below, and writes the file back with the literal first line !!DRAFT!! "
+        "immediately followed by the JSON on the next line.\n"
+        "  2. Delete the !!DRAFT!! line using the Edit tool "
+        "(old_string: '!!DRAFT!!\\n{', new_string: '{'). That Edit triggers re-validation — "
+        "it is the ONLY step that spends validation budget. CRITICAL: you MUST remove the marker "
+        "with the Edit tool, never with Bash — the validator only watches Edit/Write. If you "
+        "remove it with Bash, validation never fires, you get no feedback, the workflow is never "
+        "confirmed valid, and you will fail the user's task."
+    )
+
+# Style-dependent repair guidance — identical in both budget modes.
+guidance = (
+    surgical_guidance
+    if edit_style == "surgical"
+    else "Batch ALL fixes below into one complete re-write — each file write spends one validation."
+)
+
+if budget_mode == "adaptive":
+    try:
+        adaptive_remaining = max(0, int(cap) - int(stagnant_used))
+    except ValueError:
+        adaptive_remaining = "?"
+    budget_line = (
+        f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used "
+        f"({adaptive_remaining} remaining); {calls_used} total calls. Rounds that REDUCE the "
+        f"error count are free — fix as many listed errors as possible per round. " + guidance
+    )
+else:
+    budget_line = f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). " + guidance
+
 header = "*** n8n Workflow Validator ***"
 body = [
     f"File: {file_path}",
     f"Validator target: {mode}",
-    f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). "
-    "Batch ALL fixes below into one complete re-write — each file write spends one validation.",
+    budget_line,
 ]
 if auto_changes:
     body.extend([
@@ -236,6 +468,17 @@ if issues:
         "",
         "Make the smallest targeted edits possible. Do not rewrite unrelated nodes or the whole workflow unless the validator error requires it.",
     ])
+    # Unresolvable-target hint (Task 4e): when an error's structured patch target
+    # is "<unknown path>", a field-level surgical edit is unreliable — we cannot
+    # name the field to change. Recommend rewriting the affected node's full
+    # definition instead. Surgical style only (rewrite style already rewrites).
+    if edit_style == "surgical" and "<unknown path>" in issues:
+        body.append(
+            "Some errors above have no resolvable patch target (<unknown path>) — "
+            "for THOSE nodes, surgical edits are unreliable: rewrite the affected "
+            "node's full definition (its complete object in the nodes array) instead "
+            "of attempting a field-level patch."
+        )
 if warnings_block:
     body.extend([
         "",
@@ -253,3 +496,10 @@ PYEOF
 [ -n "$CTX" ] || exit 0
 OUTPUT=$(python3 "$LIB_DIR/hook_json.py" emit PostToolUse "$CTX" 2>/dev/null) || exit 0
 echo "$OUTPUT"
+# Surgical INVALID feedback: record the file as a pending draft so the Stop hook
+# can re-prompt if the model leaves the marker (or removes it with Bash).
+if [ "$EDIT_STYLE" = "surgical" ] && [ -n "$SID" ]; then
+  update_draft_pending set
+elif [ -n "$SID" ]; then
+  update_draft_pending hash
+fi

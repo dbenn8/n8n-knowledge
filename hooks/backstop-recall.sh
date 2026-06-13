@@ -3,7 +3,10 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
+source "$LIB_DIR/runtime_dirs.sh" 2>/dev/null || exit 0
 source "$LIB_DIR/detect-n8n.sh" 2>/dev/null || exit 0
+# Per-user runtime paths (debug log lives under ~/.cache, not world-readable /tmp).
+nk_runtime_init
 
 [ "${CLAUDE_PLUGIN_OPTION_ENABLEBACKSTOPRECALL:-true}" = "false" ] && exit 0
 
@@ -76,11 +79,14 @@ DEBUG="${CLAUDE_PLUGIN_OPTION_DEBUGRECALL:-summary}"
 if [ "$DEBUG" != "off" ]; then
   LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
   printf '%s' "$CTX" | python3 -c "
-import sys
+import sys, os
 sys.path.insert(0, '$LIB_DIR')
+import runtime_dirs
 from debug_formatter import format_debug
+debug_log = os.environ.get('NK_DEBUG_LOG') or runtime_dirs.debug_log_path()
+os.umask(0o077)  # debug log holds injected-context text — owner-only (0600)
 ctx = sys.stdin.read()
-with open('/tmp/n8n-knowledge-debug.log', 'a') as f:
+with open(debug_log, 'a') as f:
     f.write(format_debug(ctx, '$DEBUG', 'backstop after $TOOL'))
 " 2>/dev/null || true
 fi

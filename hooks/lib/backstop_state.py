@@ -2,13 +2,17 @@
 import json
 import os
 
+import runtime_dirs
+
 STALE_TOTAL = 15
 STALE_TRIGGER = 5
 
 
 def _dir():
-    base = os.environ.get("TMPDIR", "/tmp").rstrip("/")
-    d = os.path.join(base, "n8n-knowledge-backstop")
+    # Per-user runtime dir (0700) instead of world-readable /tmp; backstop session
+    # state lives under <runtime>/state/backstop. runtime_dirs is imported via the
+    # same sys.path entry callers use to import this module (hooks/lib on sys.path).
+    d = os.path.join(runtime_dirs.state_dir(), "backstop")
     os.makedirs(d, exist_ok=True)
     return d
 

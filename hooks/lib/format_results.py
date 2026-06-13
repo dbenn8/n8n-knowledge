@@ -342,9 +342,129 @@ SYNTHESIS_NOTE = (
 )
 
 
-def render_result(n, r, level, obs, sf_pairs, cfg):
-    """Render one result as a <result>…</result> block with prose interior."""
+# Forum-handle redaction (synthesized observation prose ONLY).
+#
+# DESIGN (Dan, 2026-06-11 — supersedes the regex era): redact by EXACT
+# REPLACEMENT OF KNOWN AUTHOR NAMES, read from each observation's own source
+# facts' metadata. NO regex guessing.
+#
+# History / why the regexes are gone: three iterations of context-anchored
+# regex redaction (attribution-frame matching, an underscore-handle detector,
+# a technical-final-segment allowlist) kept corrupting technical prose —
+# underscore-joined n8n vocabulary in an attribution frame ("switch from
+# Basic_Auth to OAuth2", "Set_Node writes the field", "per Loop_Over_Items
+# iteration", "fixed by Mark_as_Read handler", "Use Split_In_Batches to chunk")
+# was misread as a forum handle and mangled into "a community user". Every
+# allowlist patch was a losing game of whack-a-mole against an open technical
+# vocabulary.
+#
+# The fix removes the guessing entirely. An observation's SOURCE FACTS already
+# carry the real author usernames in ``metadata.username`` (e.g. "Chrisyk",
+# "Julia_Solias_Huelamo"), and the source-facts plumbing delivers those facts
+# for every observation on every channel (semantic + gotcha/struct) via the one
+# merged top-level ``source_facts`` dict. So redaction is now:
+#   * METADATA-DRIVEN — only names that actually authored this observation's
+#     source posts are candidates;
+#   * DETERMINISTIC — exact (case-insensitive) name replacement, no heuristics;
+#   * SCOPED PER-OBSERVATION — the candidate set is just this observation's own
+#     authors, which bounds the blast radius of any name/vocabulary collision.
+#
+# A name that is not a known source author is NEVER touched, so technical
+# vocabulary can no longer be corrupted. Observations whose source facts are
+# absent get no redaction — under-redaction of public names is the accepted
+# failure mode (far safer than corrupting prose).
+#
+# URL-safety: ``redact_preserving_urls`` carves URL runs out before redacting
+# and rejoins them byte-identical, so a URL that legitimately contains a
+# username (e.g. ``/u/Chrisyk``) stays intact.
+
+# Matches a URL run so it can be carved out of the text before redaction and
+# rejoined byte-identical afterwards.
+_URL_SPAN = re.compile(r"https?://\S+")
+
+
+def collect_source_usernames(r, source_facts):
+    """Authors of this observation's source posts — the ONLY names we redact.
+
+    Exact metadata-driven replacement (no regex guessing): a name that is not
+    a known source author is never touched, so technical vocabulary can never
+    be corrupted. Observations whose source facts are absent get no redaction —
+    under-redaction of public names is the accepted failure mode."""
+    names = set()
+    for fid in r.get("source_fact_ids") or []:
+        u = ((source_facts.get(fid) or {}).get("metadata") or {}).get("username")
+        if u and len(u) >= 3:  # 1-2 char names would shred prose on substring-ish word matches
+            names.add(u)
+    return names
+
+
+def redact_known_handles(text, names):
+    """Replace each known source-author name (whole-word, with an optional
+    leading ``user `` absorbed) with ``a community user``.
+
+    Single-pass alternation, longest-first, so the injected replacement is
+    never re-scanned — an author literally named "User" must not re-match the
+    token we just inserted (review finding C1, 2026-06-11). Matching is
+    case-sensitive against the name as stored plus a capitalized variant:
+    a capitalized author named "Set" or "Code" must never clobber lowercase
+    technical prose, while a lowercase-stored handle still matches at sentence
+    start. Lowercase prose of a capitalized handle going unredacted is
+    accepted under-redaction. The trailing ``\\b`` permits a possessive
+    ``'s`` to remain ("Chrisyk's workflow" -> "a community user's workflow").
+    Only the names passed in are candidates, so technical prose outside an
+    exact-case collision is never corrupted.
+    """
+    if not text or not names:
+        return text
+    variants = set()
+    for name in names:
+        variants.add(name)
+        variants.add(name[:1].upper() + name[1:])
+    alt = "|".join(re.escape(n) for n in sorted(variants, key=len, reverse=True))
+    pattern = re.compile(r"\b(?:[Uu]ser\s+)?(?:" + alt + r")\b")
+    return pattern.sub("a community user", text)
+
+
+def redact_preserving_urls(text, names):
+    """Redact known author handles in prose while leaving any URLs byte-identical.
+
+    Splits the text on URL runs, redacts only the non-URL spans, and rejoins
+    with the original URLs untouched. A URL may legitimately contain a username
+    (e.g. ``/u/Chrisyk``); those must stay byte-identical, so the redaction is
+    only applied to the prose spans between URLs.
+    """
+    if not text or not names:
+        return text
+    parts = _URL_SPAN.split(text)
+    urls = _URL_SPAN.findall(text)
+    out = [redact_known_handles(p, names) for p in parts]
+    result = out[0]
+    for u, p in zip(urls, out[1:]):
+        result += u + p
+    return result
+
+
+def render_result(n, r, level, obs, sf_pairs, cfg, source_facts=None):
+    """Render one result as a <result>…</result> block with prose interior.
+
+    ``source_facts`` is the response-level fact mapping (the same dict used to
+    resolve source URLs). For an observation, the author usernames of its own
+    source posts are read from that mapping and redacted from the prose by exact
+    replacement — see ``collect_source_usernames``/``redact_preserving_urls``.
+    """
     text = (r.get("text") or "").strip()
+    # Strip community forum handles from synthesized observation prose ONLY.
+    # Redaction is metadata-driven and scoped per-observation: the ONLY names
+    # replaced are the authors of THIS observation's source posts (read from
+    # source_facts[*].metadata.username). redact_preserving_urls carves out URL
+    # runs first so a URL containing /u/<username> stays byte-identical, and
+    # redacts only the surrounding prose. Done BEFORE truncation below so a name
+    # can't survive by being split across the truncation boundary. Raw facts
+    # keep their text untouched (the name there IS the attribution). Observations
+    # whose source facts are absent get no redaction (accepted under-redaction).
+    if obs:
+        names = collect_source_usernames(r, source_facts or {})
+        text = redact_preserving_urls(text, names)
     length_key = f"max_text_length_{level.lower()}"
     max_len = cfg.get(length_key, -1)
     if max_len >= 0:
@@ -353,6 +473,11 @@ def render_result(n, r, level, obs, sf_pairs, cfg):
             text = text[:max_len] + "..."
 
     if obs:
+        # Total consolidation strength: how many source facts this observation
+        # was distilled from. Shown in the open-tag so a 24-source synthesis
+        # LOOKS stronger than a 2-source one, even when only the first 3 links
+        # are listed below (or none resolve in this response).
+        num_ids = len(r.get("source_fact_ids") or [])
         if sf_pairs:
             purl, pfact = sf_pairs[0]
             desc = engagement_descriptor(pfact.get("metadata") or {}, pfact.get("tags") or [])
@@ -361,13 +486,24 @@ def render_result(n, r, level, obs, sf_pairs, cfg):
             extras = [u for u, _ in sf_pairs[1:]]
             if extras:
                 src_line += " | also: " + ", ".join(extras)
+        elif num_ids:
+            # IDs exist but none resolved to a URL in this response — report the
+            # count so consolidation strength is still visible, and point at
+            # manual recall for the originals (do NOT imply zero provenance).
+            src_line = (
+                f"sources: {num_ids} source facts (links not resolved in this "
+                f"response) — use manual recall for originals"
+            )
         else:
             src_line = "sources: unavailable — use manual recall to find the original"
         if sf_pairs:
             tag = github_state_tag(sf_pairs[0][1].get("metadata"), sf_pairs[0][1].get("tags"))
             if tag:
                 text = f"{tag} {text}"
-        open_tag = f'<result n="{n}" kind="synthesis" confidence="{level}" sources="{len(sf_pairs)}">'
+        # Advertise the larger of (total source_fact_ids, resolved links shown)
+        # so we never under-report what's visible nor hide consolidation depth.
+        total = num_ids if num_ids > len(sf_pairs) else len(sf_pairs)
+        open_tag = f'<result n="{n}" kind="synthesis" confidence="{level}" sources="{total}">'
         interior = "\n".join([text, src_line, SYNTHESIS_NOTE])
     else:
         source = detect_source(r.get("tags") or [])
@@ -498,7 +634,7 @@ def format_results(response_file, project_dir=None):
 
     # Render regular results
     for r, level, score, obs, sf_pairs in filtered:
-        lines.append(render_result(n, r, level, obs, sf_pairs, cfg))
+        lines.append(render_result(n, r, level, obs, sf_pairs, cfg, source_facts))
         n += 1
 
     lines.append("")
