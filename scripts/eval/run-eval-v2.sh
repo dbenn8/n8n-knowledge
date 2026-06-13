@@ -28,7 +28,11 @@ MODEL="claude-sonnet-4-6"
 BATCH_SIZE=0      # 0 = no batching (all parallel); set e.g. 32 to avoid rate limits
 BATCH_PAUSE=10    # seconds to pause between batches
 RESUME=""         # path to prior results dir — skip prompts that already have valid output
+RESUME_FAILED_FROM=""  # path to prior results dir — continue unfinished prompts from saved Claude sessions when possible
+RESUME_CLAUDE_CONFIG_DIR=""  # explicit Claude config/session store to use for --resume recovery
 EVAL_GROUPS="a"   # comma-separated group letters to run (a, b, c); default is just group a
+PROMPT_FILE_IDXS="${EVAL_PROMPT_FILE_IDXS:-}"  # optional comma-separated source line indices to run
+PROMPT_IDS="${EVAL_PROMPT_IDS:-}"  # optional comma-separated prompt ids to run
 CONDITIONS_PARALLEL="${EVAL_CONDITIONS_PARALLEL:-0}"  # 1 = run conditions in parallel
 # ⚠️ DO NOT enable repair without reading the big warning block above repair_if_needed().
 #    It is currently HALF-BROKEN for the file-based plugin flow AND biases plugin vs mcp/bare.
@@ -42,11 +46,12 @@ MODEL_TIMEOUT_SECONDS="${EVAL_MODEL_TIMEOUT_SECONDS:-240}"  # 0 = no timeout
 # JSONL is moved into the per-run folder as prompt-NNN-runNN.transcript.jsonl,
 # so every tool call / hook injection / validator round is reviewable post-run.
 # Default 0 (off) to avoid transcript-dir churn on large batch runs.
-KEEP_TRANSCRIPTS="${EVAL_KEEP_TRANSCRIPTS:-0}"
-SESSION_PERSIST_ARGS=(--no-session-persistence)
-if [ "$KEEP_TRANSCRIPTS" = "1" ]; then
-  SESSION_PERSIST_ARGS=()
-fi
+KEEP_TRANSCRIPTS="${EVAL_KEEP_TRANSCRIPTS:-1}"
+PERSIST_SESSIONS="${EVAL_PERSIST_SESSIONS:-0}"  # 1 = keep the Claude session store so failed runs can be resumed later
+SESSION_PERSIST_ARGS=()
+CLAUDE_BIN="${EVAL_CLAUDE_BIN:-claude}"
+RESULTS_BASENAME="$(basename "$RESULTS_DIR")"
+RUN_MANIFEST_PATH="$RESULTS_DIR/run-manifest.json"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -58,13 +63,85 @@ while [[ $# -gt 0 ]]; do
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --batch-pause) BATCH_PAUSE="$2"; shift 2 ;;
     --resume) RESUME="$2"; shift 2 ;;
+    --resume-failed-from) RESUME_FAILED_FROM="$2"; shift 2 ;;
+    --resume-claude-config-dir) RESUME_CLAUDE_CONFIG_DIR="$2"; shift 2 ;;
     --groups) EVAL_GROUPS="$2"; shift 2 ;;
+    --prompt-file-idxs) PROMPT_FILE_IDXS="$2"; shift 2 ;;
+    --prompt-ids) PROMPT_IDS="$2"; shift 2 ;;
     --condition-advance-threshold) CONDITION_ADVANCE_THRESHOLD="$2"; shift 2 ;;
     --max-in-flight-runs) MAX_IN_FLIGHT_RUNS="$2"; shift 2 ;;
     --model-timeout-seconds) MODEL_TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --persist-sessions) PERSIST_SESSIONS=1; shift ;;
     *) shift ;;
   esac
 done
+
+if [ -n "$RESUME_FAILED_FROM" ] && [ -n "$RESUME" ]; then
+  echo "ERROR: use either --resume or --resume-failed-from, not both"
+  exit 1
+fi
+
+RESUME_SOURCE="${RESUME_FAILED_FROM:-$RESUME}"
+RESUME_MANIFEST_PATH=""
+if [ -n "$RESUME_SOURCE" ] && [ -f "$RESUME_SOURCE/run-manifest.json" ]; then
+  RESUME_MANIFEST_PATH="$RESUME_SOURCE/run-manifest.json"
+fi
+
+if [ -z "$PROMPT_FILE_IDXS" ] && [ -n "$RESUME_MANIFEST_PATH" ]; then
+  PROMPT_FILE_IDXS="$(python3 - "$RESUME_MANIFEST_PATH" << 'PYEOF'
+import json
+import sys
+
+try:
+    manifest = json.load(open(sys.argv[1]))
+except Exception:
+    manifest = {}
+
+prompt_idxs = manifest.get("prompt_file_idxs") or []
+if isinstance(prompt_idxs, list):
+    print(",".join(str(x) for x in prompt_idxs))
+PYEOF
+)"
+fi
+
+if [ -z "$PROMPT_IDS" ] && [ -n "$RESUME_MANIFEST_PATH" ]; then
+  PROMPT_IDS="$(python3 - "$RESUME_MANIFEST_PATH" << 'PYEOF'
+import json
+import sys
+
+try:
+    manifest = json.load(open(sys.argv[1]))
+except Exception:
+    manifest = {}
+
+prompt_ids = manifest.get("prompt_ids") or []
+if isinstance(prompt_ids, list):
+    print(",".join(str(x) for x in prompt_ids))
+PYEOF
+)"
+fi
+
+if [ -z "$RESUME_CLAUDE_CONFIG_DIR" ] && [ -n "$RESUME_MANIFEST_PATH" ]; then
+  RESUME_CLAUDE_CONFIG_DIR="$(python3 - "$RESUME_MANIFEST_PATH" << 'PYEOF'
+import json
+import sys
+
+try:
+    manifest = json.load(open(sys.argv[1]))
+except Exception:
+    manifest = {}
+
+value = manifest.get("claude_config_dir") or ""
+print(value)
+PYEOF
+)"
+fi
+
+if [ "$KEEP_TRANSCRIPTS" = "1" ] || [ "$PERSIST_SESSIONS" = "1" ] || [ -n "$RESUME_FAILED_FROM" ]; then
+  SESSION_PERSIST_ARGS=()
+else
+  SESSION_PERSIST_ARGS=(--no-session-persistence)
+fi
 
 # Read prompts from ground_truth.jsonl
 GT_FILE="${EVAL_GROUND_TRUTH_FILE:-$SCRIPT_DIR/ground_truth.jsonl}"
@@ -81,7 +158,7 @@ while IFS=$'\t' read -r fileidx pid pprompt; do
   PIDXS+=("$fileidx")
   IDS+=("$pid")
   PROMPTS+=("$pprompt")
-done < <(python3 - "$GT_FILE" "$EVAL_GROUPS" << 'PYEOF'
+done < <(EVAL_PROMPT_FILE_IDXS="$PROMPT_FILE_IDXS" EVAL_PROMPT_IDS="$PROMPT_IDS" python3 - "$GT_FILE" "$EVAL_GROUPS" << 'PYEOF'
 import json, os, sys
 
 gt_file = sys.argv[1]
@@ -91,6 +168,8 @@ allowed = set(g.strip() for g in groups_arg.split(",") if g.strip()) if groups_a
 # e.g. EVAL_PROMPT_FILE_IDXS=89,101,107 for targeted hard-prompt tests.
 idxs_arg = os.environ.get("EVAL_PROMPT_FILE_IDXS", "").strip()
 allowed_idxs = set(int(x) for x in idxs_arg.split(",") if x.strip()) if idxs_arg else None
+ids_arg = os.environ.get("EVAL_PROMPT_IDS", "").strip()
+allowed_ids = set(x.strip() for x in ids_arg.split(",") if x.strip()) if ids_arg else None
 
 with open(gt_file) as f:
     for i, line in enumerate(f):
@@ -106,6 +185,8 @@ with open(gt_file) as f:
         # Tab-separated: fileidx \t id \t prompt (prompt may not contain tabs)
         prompt = e["prompt"].replace("\t", " ").replace("\n", " ")
         eid = e["id"]
+        if allowed_ids is not None and eid not in allowed_ids:
+            continue
         print(f"{i}\t{eid}\t{prompt}")
 PYEOF
 )
@@ -146,21 +227,129 @@ EOF
 # Startup sweep: remove scratch dirs stranded by previously hard-killed runs.
 # Age-gated (>3h) so a concurrently RUNNING harness's fresh dir is never swept.
 find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'n8n-eval-claude-config.*' -type d -mmin +180 -exec rm -rf {} + 2>/dev/null || true
-EVAL_SCRATCH_CONFIG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/n8n-eval-claude-config.XXXXXX")
-[ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$EVAL_SCRATCH_CONFIG_DIR/.claude.json"
+CLAUDE_CONFIG_ROOT="${RESUME_CLAUDE_CONFIG_DIR:-}"
+CLAUDE_CONFIG_CREATED=0
+CLAUDE_CONFIG_IS_PERSISTENT=0
+RESUME_SESSION_STORE_AVAILABLE=0
+if [ -n "$CLAUDE_CONFIG_ROOT" ]; then
+  mkdir -p "$CLAUDE_CONFIG_ROOT"
+  RESUME_SESSION_STORE_AVAILABLE=1
+else
+  if [ "$PERSIST_SESSIONS" = "1" ] || [ -n "$RESUME_FAILED_FROM" ]; then
+    CLAUDE_CONFIG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/n8n-eval-claude-config-persist.${RESULTS_BASENAME}.XXXXXX")"
+    CLAUDE_CONFIG_IS_PERSISTENT=1
+  else
+    CLAUDE_CONFIG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/n8n-eval-claude-config.XXXXXX")"
+  fi
+  CLAUDE_CONFIG_CREATED=1
+fi
+[ -f "$HOME/.claude.json" ] && [ ! -f "$CLAUDE_CONFIG_ROOT/.claude.json" ] && cp "$HOME/.claude.json" "$CLAUDE_CONFIG_ROOT/.claude.json"
 # Symlink (not copy) the credentials: OAuth tokens rotate mid-run, and a stale
 # copy 401s every session (observed 2026-06-12: token rotated 1 min after launch,
 # all 256 Sonnet sessions died). The scratch-dir cleanup only removes the link.
-[ -f "$HOME/.claude/.credentials.json" ] && ln -s "$HOME/.claude/.credentials.json" "$EVAL_SCRATCH_CONFIG_DIR/.credentials.json"
-export CLAUDE_CONFIG_DIR="$EVAL_SCRATCH_CONFIG_DIR"
+[ -f "$HOME/.claude/.credentials.json" ] && [ ! -e "$CLAUDE_CONFIG_ROOT/.credentials.json" ] && ln -s "$HOME/.claude/.credentials.json" "$CLAUDE_CONFIG_ROOT/.credentials.json"
+export CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_ROOT"
+RESUME_PROJECT_ROOT="$(cd "$REPO_DIR" && pwd)"
+RESUME_PROJECT_SLUG="$(printf '%s' "$RESUME_PROJECT_ROOT" | tr '/.' '--')"
 # Clean up credential copies on EVERY exit path we can trap. SIGKILL cannot be
 # trapped — the startup sweep below handles dirs stranded by a hard kill.
-cleanup_scratch_config() { rm -rf "$EVAL_SCRATCH_CONFIG_DIR"; }
+cleanup_scratch_config() {
+  if [ "$CLAUDE_CONFIG_CREATED" = "1" ] && [ "$CLAUDE_CONFIG_IS_PERSISTENT" != "1" ]; then
+    rm -rf "$CLAUDE_CONFIG_ROOT"
+  fi
+}
 trap cleanup_scratch_config EXIT
 # On INT/TERM the cleanup runs twice (signal handler + the EXIT trap that fires
 # on the handler's own `exit`); rm -rf is idempotent, so the double call is safe.
 trap 'cleanup_scratch_config; exit 130' INT
 trap 'cleanup_scratch_config; exit 143' TERM
+
+session_transcript_path_for_id() {
+  local session_id="$1"
+  printf '%s/projects/%s/%s.jsonl\n' "$CLAUDE_CONFIG_DIR" "$RESUME_PROJECT_SLUG" "$session_id"
+}
+
+session_transcript_available() {
+  local session_id="$1"
+  local session_path
+  session_path="$(session_transcript_path_for_id "$session_id")"
+  [ -f "$session_path" ]
+}
+
+reconstruct_resume_transcripts() {
+  local source_root="$1"
+  python3 - "$source_root" "$CLAUDE_CONFIG_DIR" "$RESUME_PROJECT_SLUG" << 'PYEOF'
+import glob
+import json
+import os
+import shutil
+import sys
+
+source_root, config_dir, project_slug = sys.argv[1:4]
+target_dir = os.path.join(config_dir, "projects", project_slug)
+os.makedirs(target_dir, exist_ok=True)
+
+restored = 0
+
+for transcript_path in sorted(
+    glob.glob(os.path.join(source_root, "**", "prompt-*-run*.transcript.jsonl"), recursive=True)
+):
+    base = transcript_path[: -len(".transcript.jsonl")]
+    session_id = ""
+
+    for candidate in (base + ".session.json", base + ".json", base + ".meta.json"):
+        if not os.path.exists(candidate):
+            continue
+        try:
+            payload = json.load(open(candidate))
+        except Exception:
+            continue
+        session_id = payload.get("session_id") or ""
+        if session_id:
+            break
+
+    if not session_id:
+        try:
+            with open(transcript_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    session_id = payload.get("sessionId") or payload.get("session_id") or ""
+                    if session_id:
+                        break
+        except Exception:
+            session_id = ""
+
+    if not session_id:
+        continue
+
+    target_path = os.path.join(target_dir, session_id + ".jsonl")
+    if os.path.exists(target_path):
+        try:
+            if os.path.getsize(target_path) >= os.path.getsize(transcript_path):
+                continue
+        except OSError:
+            continue
+    shutil.copy2(transcript_path, target_path)
+    restored += 1
+
+print(restored)
+PYEOF
+}
+
+if [ -n "$RESUME_FAILED_FROM" ]; then
+  RECONSTRUCTED_TRANSCRIPTS_COUNT="$(reconstruct_resume_transcripts "$RESUME_FAILED_FROM")"
+  if [ "${RECONSTRUCTED_TRANSCRIPTS_COUNT:-0}" -gt 0 ]; then
+    RESUME_SESSION_STORE_AVAILABLE=1
+  fi
+else
+  RECONSTRUCTED_TRANSCRIPTS_COUNT=0
+fi
 
 describe_condition_isolation() {
   local cond="$1"
@@ -227,6 +416,92 @@ else:
 PYEOF
 }
 
+write_run_manifest() {
+  python3 - "$RUN_MANIFEST_PATH" "$RESULTS_DIR" "$RESUME" "$RESUME_FAILED_FROM" "$CLAUDE_CONFIG_DIR" "$MODEL" "$RUNS" "$CONDITIONS" "$EVAL_GROUPS" "$LIMIT" "$PROMPT_FILE_IDXS" "$PROMPT_IDS" "$TOTAL" "$PERSIST_SESSIONS" "$KEEP_TRANSCRIPTS" << 'PYEOF'
+import json
+import os
+import sys
+
+(
+    manifest_path,
+    results_dir,
+    resume_from,
+    resume_failed_from,
+    claude_config_dir,
+    model,
+    runs,
+    conditions,
+    groups,
+    limit_value,
+    prompt_file_idxs,
+    prompt_ids,
+    total,
+    persist_sessions,
+    keep_transcripts,
+) = sys.argv[1:16]
+
+idx_values = []
+if prompt_file_idxs.strip():
+    idx_values = [int(x) for x in prompt_file_idxs.split(",") if x.strip()]
+prompt_id_values = [x for x in prompt_ids.split(",") if x.strip()]
+
+manifest = {
+    "results_dir": results_dir,
+    "resume_from": resume_from or None,
+    "resume_failed_from": resume_failed_from or None,
+    "claude_config_dir": claude_config_dir or None,
+    "model": model,
+    "runs": int(runs),
+    "conditions": [x.strip() for x in conditions.split(",") if x.strip()],
+    "groups": [x.strip() for x in groups.split(",") if x.strip()],
+    "limit": int(limit_value) if limit_value else None,
+    "prompt_file_idxs": idx_values,
+    "prompt_ids": prompt_id_values,
+    "prompt_count": int(total),
+    "persist_sessions": persist_sessions == "1",
+    "keep_transcripts": keep_transcripts == "1",
+}
+
+with open(manifest_path, "w") as f:
+    json.dump(manifest, f, indent=2, sort_keys=True)
+PYEOF
+}
+
+copy_resume_artifacts_for_condition() {
+  local src_dir="$1" dst_dir="$2" allowed_idxs_csv="${3:-}"
+  python3 - "$src_dir" "$dst_dir" "$allowed_idxs_csv" << 'PYEOF'
+import os
+import re
+import shutil
+import sys
+
+src_dir, dst_dir, allowed_idxs_csv = sys.argv[1:4]
+if not os.path.isdir(src_dir):
+    raise SystemExit(0)
+
+os.makedirs(dst_dir, exist_ok=True)
+
+allowed_idxs = None
+if allowed_idxs_csv.strip():
+    allowed_idxs = {int(x) for x in allowed_idxs_csv.split(",") if x.strip()}
+
+for name in os.listdir(src_dir):
+    if not name.startswith("prompt-"):
+        continue
+    match = re.match(r"prompt-(\d+)-run\d+", name)
+    if allowed_idxs is not None and not (match and int(match.group(1)) in allowed_idxs):
+        continue
+    src = os.path.join(src_dir, name)
+    dst = os.path.join(dst_dir, name)
+    if os.path.isdir(src):
+        if os.path.exists(dst):
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+    else:
+        shutil.copy2(src, dst)
+PYEOF
+}
+
 SYSTEM="You are helping a user build n8n workflows. Build the complete solution that fully addresses the user's request — include all required nodes and connections. Use full node type names (e.g. n8n-nodes-base.slack). Include typeVersion, position, and all required parameters for each node."
 
 echo "=== PRODUCTION EVAL v2 ==="
@@ -242,6 +517,8 @@ echo "  Condition advance threshold: $CONDITION_ADVANCE_THRESHOLD"
 echo "  Max in-flight runs: $MAX_IN_FLIGHT_RUNS"
 echo "  Model timeout: ${MODEL_TIMEOUT_SECONDS}s (0=disabled)"
 echo "  Batch size: ${BATCH_SIZE} (0=all parallel)"
+echo "  Prompt file idxs: ${PROMPT_FILE_IDXS:-<all in selected groups>}"
+echo "  Prompt ids: ${PROMPT_IDS:-<all in selected groups>}"
 echo "  Plugin validator: mode=${EVAL_PLUGIN_VALIDATOR_MODE:-default} cloud_url=${EVAL_PLUGIN_VALIDATOR_CLOUD_URL:-<unset>} local_path=${EVAL_PLUGIN_VALIDATOR_LOCAL_PATH:-<auto>}"
 if [ -n "${EVAL_SCORING_VALIDATOR_MODE:-}" ]; then
   scoring_mode_display="$EVAL_SCORING_VALIDATOR_MODE"
@@ -254,25 +531,109 @@ echo "  Scoring validator: mode=${scoring_mode_display} cloud_url=${EVAL_SCORING
 if [ -n "$RESUME" ]; then
   echo "  Resume from: $RESUME"
 fi
+if [ -n "$RESUME_FAILED_FROM" ]; then
+  echo "  Resume failed from: $RESUME_FAILED_FROM"
+fi
+echo "  Claude config dir: $CLAUDE_CONFIG_DIR"
+echo "  Persist sessions: $PERSIST_SESSIONS"
+if [ -n "$RESUME_FAILED_FROM" ]; then
+  echo "  Reconstructed transcripts: ${RECONSTRUCTED_TRANSCRIPTS_COUNT:-0}"
+  if [ "$RESUME_SESSION_STORE_AVAILABLE" != "1" ]; then
+    echo "  Resume failed mode: no prior Claude session store detected, so unfinished prompts will rerun fresh"
+  fi
+fi
 echo "  Output: $RESULTS_DIR"
 echo ""
 
-python3 "$SCRIPT_DIR/validator_preflight.py"
-echo ""
+if [ "${EVAL_SKIP_VALIDATOR_PREFLIGHT:-0}" != "1" ]; then
+  python3 "$SCRIPT_DIR/validator_preflight.py"
+  echo ""
+fi
+
+write_run_manifest
 
 # Resume: seed output dir with prior results so run_one can skip completed prompts
-if [ -n "$RESUME" ]; then
-  echo "Seeding results from $RESUME ..."
+if [ -n "$RESUME_SOURCE" ]; then
+  SELECTED_PROMPT_FILE_IDXS=""
+  for ((i=0; i<TOTAL; i++)); do
+    if [ -n "$SELECTED_PROMPT_FILE_IDXS" ]; then
+      SELECTED_PROMPT_FILE_IDXS+=","
+    fi
+    SELECTED_PROMPT_FILE_IDXS+="${PIDXS[$i]}"
+  done
+  echo "Seeding results from $RESUME_SOURCE ..."
   IFS=',' read -ra COND_LIST_TMP <<< "$CONDITIONS"
   for cond in "${COND_LIST_TMP[@]}"; do
-    if [ -d "$RESUME/$cond" ]; then
+    if [ -d "$RESUME_SOURCE/$cond" ]; then
       mkdir -p "$RESULTS_DIR/$cond"
-      cp "$RESUME/$cond"/*.json "$RESULTS_DIR/$cond/" 2>/dev/null || true
-      echo "  Copied $(ls "$RESULTS_DIR/$cond"/*.json 2>/dev/null | wc -l | tr -d ' ') files for $cond"
+      copy_resume_artifacts_for_condition "$RESUME_SOURCE/$cond" "$RESULTS_DIR/$cond" "$SELECTED_PROMPT_FILE_IDXS"
+      echo "  Seeded $(find "$RESULTS_DIR/$cond" -maxdepth 1 -name 'prompt-*' | wc -l | tr -d ' ') artifacts for $cond"
     fi
   done
   echo ""
 fi
+
+run_is_successful() {
+  local outfile="$1"
+  [ -s "$outfile" ] || return 1
+  python3 - "$outfile" << 'PYEOF'
+import json
+import sys
+
+try:
+    payload = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(1)
+
+raise SystemExit(0 if not (payload.get("is_error") or payload.get("error")) else 1)
+PYEOF
+}
+
+read_session_id_for_outfile() {
+  local outfile="$1"
+  python3 - "$outfile" << 'PYEOF'
+import json
+import os
+import sys
+
+outfile = sys.argv[1]
+base = outfile[:-5] if outfile.endswith(".json") else outfile
+for path in (base + ".session.json", outfile):
+    if not os.path.exists(path):
+        continue
+    try:
+        payload = json.load(open(path))
+    except Exception:
+        continue
+    sid = payload.get("session_id") or ""
+    if sid:
+        print(sid)
+        raise SystemExit(0)
+PYEOF
+}
+
+write_session_sidecar() {
+  local outfile="$1" cond="$2" idx="$3" run="$4" fileidx="$5" prompt_id="$6" session_id="$7" resume_used="${8:-0}"
+  python3 - "$outfile" "$cond" "$idx" "$run" "$fileidx" "$prompt_id" "$session_id" "$resume_used" << 'PYEOF'
+import json
+import os
+import sys
+
+outfile, cond, idx, run, fileidx, prompt_id, session_id, resume_used = sys.argv[1:9]
+sidecar = outfile[:-5] + ".session.json" if outfile.endswith(".json") else outfile + ".session.json"
+payload = {
+    "condition": cond,
+    "prompt_array_idx": int(idx),
+    "prompt_idx": int(fileidx),
+    "prompt_id": prompt_id,
+    "run": int(run),
+    "session_id": session_id,
+    "resume_session_used": resume_used == "1",
+}
+with open(sidecar, "w") as f:
+    json.dump(payload, f)
+PYEOF
+}
 
 run_command_with_timeout() {
   local timeout_seconds="$1" cwd="$2" outfile="$3" errfile="$4"
@@ -336,12 +697,14 @@ PYEOF
 }
 
 invoke_model() {
-  local cond="$1" prompt="$2" outfile="$3"
+  local cond="$1" prompt="$2" outfile="$3" session_id="$4" resume_session="${5:-0}"
   local errfile="${outfile%.json}.stderr.log"
   local wf_dir=""
   local -a plugin_env=()
   local -a plugin_cmd=()
+  local -a common_args=()
   local cmd_rc=0
+  local effective_prompt="$prompt"
   rm -f "$errfile"
 
   # File-output mode: when enabled, EVERY condition (bare/plugin/mcp) gets the SAME
@@ -361,16 +724,31 @@ Save the final workflow as a single .json file inside this folder: $wf_dir
 Choose a descriptive filename based on what the workflow does (e.g. slack-post-message.json). Put exactly one workflow file in that folder — this file is the importable deliverable the user will upload to n8n."
   fi
 
+  common_args=(
+    --output-format json
+    --system-prompt "$run_system"
+    --model "$MODEL"
+    --disable-slash-commands
+    --dangerously-skip-permissions
+  )
+  if [ "$resume_session" = "1" ]; then
+    effective_prompt="${EVAL_RESUME_CONTINUE_PROMPT:-Continue from the current session state and finish the task. Do not restart from scratch. Reuse any existing workflow file/output folder from earlier in this session and return the final answer in the same format as before.}"
+    common_args=(--resume "$session_id" "${common_args[@]}")
+  else
+    common_args=(--session-id "$session_id" "${common_args[@]}")
+    if [ "${#SESSION_PERSIST_ARGS[@]}" -gt 0 ]; then
+      common_args+=("${SESSION_PERSIST_ARGS[@]}")
+    fi
+  fi
+
   case "$cond" in
     bare)
       run_command_with_timeout "$MODEL_TIMEOUT_SECONDS" "$REPO_DIR" "$outfile" "$errfile" \
-        claude -p "$prompt" --output-format json --system-prompt "$run_system" \
-          --model "$MODEL" \
+        "$CLAUDE_BIN" -p "$effective_prompt" \
+          "${common_args[@]}" \
           --settings "$CLEAN_SETTINGS" \
           --strict-mcp-config --mcp-config "$EMPTY_MCP" \
-          --disable-slash-commands \
-          ${SESSION_PERSIST_ARGS[@]+"${SESSION_PERSIST_ARGS[@]}"} \
-          --dangerously-skip-permissions || cmd_rc=$?
+          || cmd_rc=$?
       ;;
     plugin)
       # System prompt ($run_system) is IDENTICAL across plugin/mcp/bare — including the
@@ -380,7 +758,7 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
       # auto-recall hook. Nothing plugin-specific lives in the prompt → no teaching-to-the-test.
       if [ "${EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION:-0}" = "1" ]; then
         plugin_env+=("CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true")
-        plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=${EVAL_PLUGIN_WORKFLOW_VALIDATION_MAX_CALLS:-3}")
+        plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS=${EVAL_PLUGIN_WORKFLOW_VALIDATION_MAX_CALLS:-10}")
         plugin_env+=("N8N_KNOWLEDGE_AUTOFIX_LOG=${outfile%.json}.autofix.jsonl")
         rm -f "${outfile%.json}.autofix.jsonl"
         [ -n "${EVAL_PLUGIN_VALIDATOR_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_VALIDATORMODE=${EVAL_PLUGIN_VALIDATOR_MODE}")
@@ -390,14 +768,11 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
         [ -n "${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE}")
       fi
       plugin_cmd=(
-        claude -p "$prompt" --output-format json --system-prompt "$run_system"
-        --model "$MODEL"
+        "$CLAUDE_BIN" -p "$effective_prompt"
+        "${common_args[@]}"
         --settings "$CLEAN_SETTINGS"
         --plugin-dir "$REPO_DIR"
         --strict-mcp-config --mcp-config "$EMPTY_MCP"
-        --disable-slash-commands
-        ${SESSION_PERSIST_ARGS[@]+"${SESSION_PERSIST_ARGS[@]}"}
-        --dangerously-skip-permissions
       )
       if [ "${#plugin_env[@]}" -gt 0 ]; then
         run_command_with_timeout "$MODEL_TIMEOUT_SECONDS" "$REPO_DIR" "$outfile" "$errfile" \
@@ -409,13 +784,11 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
       ;;
     mcp)
       run_command_with_timeout "$MODEL_TIMEOUT_SECONDS" "$REPO_DIR" "$outfile" "$errfile" \
-        claude -p "$prompt" --output-format json --system-prompt "$run_system" \
-          --model "$MODEL" \
+        "$CLAUDE_BIN" -p "$effective_prompt" \
+          "${common_args[@]}" \
           --settings "$CLEAN_SETTINGS" \
           --strict-mcp-config --mcp-config "$N8N_MCP_CONFIG" \
-          --disable-slash-commands \
-          ${SESSION_PERSIST_ARGS[@]+"${SESSION_PERSIST_ARGS[@]}"} \
-          --dangerously-skip-permissions || cmd_rc=$?
+          || cmd_rc=$?
       ;;
   esac
 
@@ -659,7 +1032,7 @@ sys.exit(0 if (d.get('changed') and d.get('valid')) else 1)
 }
 
 write_meta() {
-  local cond="$1" idx="$2" run="$3" fileidx="$4" outfile="$5" elapsed="$6"
+  local cond="$1" idx="$2" run="$3" fileidx="$4" outfile="$5" elapsed="$6" resume_used="${7:-0}"
   python3 -c "
 import glob, json, os
 try:
@@ -760,6 +1133,8 @@ try:
         'condition': '$cond',
         'prompt_idx': ${fileidx:-$idx},
         'run': $run,
+        'session_id': d.get('session_id') or None,
+        'resume_session_used': bool($resume_used),
         'time_ms': $elapsed,
         'input_tokens': inp,
         'cache_creation': cache_c,
@@ -798,7 +1173,7 @@ save_transcript() {
   local outfile="$1"
   [ "$KEEP_TRANSCRIPTS" = "1" ] || return 0
   local sid
-  sid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('session_id',''))" "$outfile" 2>/dev/null) || return 0
+  sid="$(read_session_id_for_outfile "$outfile" 2>/dev/null || true)"
   [ -n "$sid" ] || return 0
   local resolved_repo project_slug src
   resolved_repo="$(cd "$REPO_DIR" && pwd)"
@@ -820,30 +1195,42 @@ run_one() {
   local out_dir="$RESULTS_DIR/$cond"
   mkdir -p "$out_dir"
   local outfile="$out_dir/prompt-$(printf '%03d' "${fileidx:-$idx}")-run$(printf '%02d' "$run").json"
-  rm -f "${outfile%.json}.candidate.workflow.json" "${outfile%.json}.validated.workflow.json" "${outfile%.json}.autofix.jsonl"
-  rm -rf "${outfile%.json}.workflow"
+  local prompt_id="${IDS[$idx]}"
+  local session_id=""
+  local resume_session=0
 
   # --resume: skip if we already have a valid successful (non-error) output file
-  if [ -s "$outfile" ] && python3 -c "
-import json,sys
-d = json.load(open(sys.argv[1]))
-if d.get('is_error') or d.get('error'):
-    sys.exit(1)
-sys.exit(0)
-" "$outfile" 2>/dev/null; then
+  if run_is_successful "$outfile"; then
     echo "  [$cond] p$idx r$run — skipped (resume)"
     return
   fi
 
+  if [ -n "$RESUME_FAILED_FROM" ]; then
+    session_id="$(read_session_id_for_outfile "$outfile" 2>/dev/null || true)"
+    if [ -n "$session_id" ] && session_transcript_available "$session_id"; then
+      resume_session=1
+    fi
+  fi
+
+  if [ "$resume_session" != "1" ]; then
+    rm -f "${outfile%.json}.candidate.workflow.json" "${outfile%.json}.validated.workflow.json" "${outfile%.json}.autofix.jsonl"
+    rm -rf "${outfile%.json}.workflow"
+  fi
+
+  if [ -z "$session_id" ]; then
+    session_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  fi
+  write_session_sidecar "$outfile" "$cond" "$idx" "$run" "$fileidx" "$prompt_id" "$session_id" "$resume_session"
+
   local start_ms=$(python3 -c "import time; print(int(time.time()*1000))")
-  invoke_model "$cond" "$prompt" "$outfile"
+  invoke_model "$cond" "$prompt" "$outfile" "$session_id" "$resume_session"
   save_transcript "$outfile"
   repair_if_needed "$cond" "$prompt" "$outfile"
 
   local end_ms=$(python3 -c "import time; print(int(time.time()*1000))")
   local elapsed=$((end_ms - start_ms))
 
-  write_meta "$cond" "$idx" "$run" "$fileidx" "$outfile" "$elapsed"
+  write_meta "$cond" "$idx" "$run" "$fileidx" "$outfile" "$elapsed" "$resume_session"
 
   echo "  [$cond] p$idx r$run — ${elapsed}ms"
 }
