@@ -42,7 +42,7 @@ MODEL_TIMEOUT_SECONDS="${EVAL_MODEL_TIMEOUT_SECONDS:-240}"  # 0 = no timeout
 # JSONL is moved into the per-run folder as prompt-NNN-runNN.transcript.jsonl,
 # so every tool call / hook injection / validator round is reviewable post-run.
 # Default 0 (off) to avoid transcript-dir churn on large batch runs.
-KEEP_TRANSCRIPTS="${EVAL_KEEP_TRANSCRIPTS:-0}"
+KEEP_TRANSCRIPTS="${EVAL_KEEP_TRANSCRIPTS:-1}"
 SESSION_PERSIST_ARGS=(--no-session-persistence)
 if [ "$KEEP_TRANSCRIPTS" = "1" ]; then
   SESSION_PERSIST_ARGS=()
