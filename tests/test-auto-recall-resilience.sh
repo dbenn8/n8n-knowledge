@@ -29,7 +29,7 @@ STUB_PID=""
 TMP_FILES=()
 cleanup() {
   [ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
-  for f in "${TMP_FILES[@]}"; do rm -f "$f" 2>/dev/null || true; done
+  for f in "${TMP_FILES[@]}"; do rm -rf "$f" 2>/dev/null || true; done
 }
 trap cleanup EXIT
 
@@ -58,6 +58,13 @@ start_stub() {
 }
 
 echo "=== auto-recall resilience (E2E) tests ==="
+
+# Isolate from real mental-model cache/API so all nodes go through gotcha recall.
+MM_TMPDIR="$(mktemp -d)"
+TMP_FILES+=("$MM_TMPDIR")
+export MENTAL_MODEL_CACHE_DIR="$MM_TMPDIR"
+export MENTAL_MODEL_URL="http://127.0.0.1:1/nonexistent"
+export MENTAL_MODEL_MANIFEST_URL="http://127.0.0.1:1/nonexistent"
 
 # --- E1: gotcha results survive a dead semantic recall (sem-fail mode) ---
 E1_STDOUT="$(mktemp)"

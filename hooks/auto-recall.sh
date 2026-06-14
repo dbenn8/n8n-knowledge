@@ -101,7 +101,7 @@ if [ -n "$NODE_TYPE" ]; then
   _gn=0
   for _nt in $NODE_TYPES; do
     [ "$_gn" -ge "$GOTCHA_NODE_CAP" ] && break
-    do_mental_model_recall "$_nt" > "$MM_DIR/$_gn.txt" 2>/dev/null
+    do_mental_model_recall "$_nt" "$PROMPT" > "$MM_DIR/$_gn.txt" 2>/dev/null
     if [ -s "$MM_DIR/$_gn.txt" ]; then
       _mc=$(cat "$MM_DIR/$_gn.txt")
       [ -n "$_mc" ] && MM_CONTENT="${MM_CONTENT}${_mc}

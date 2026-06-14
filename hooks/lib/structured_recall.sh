@@ -93,6 +93,7 @@ if h: print(h)
 
 do_mental_model_recall() {
   local node_type="$1"
+  local prompt="${2:-}"
 
   local service
   service=$(echo "$node_type" | sed 's/.*\.//' | sed 's/Trigger$//' | sed 's/Tool$//')
@@ -101,6 +102,7 @@ do_mental_model_recall() {
 
   local cache_file="${MENTAL_MODEL_CACHE_DIR}/${tag}.md"
   local hash_file="${MENTAL_MODEL_CACHE_DIR}/${tag}.hash"
+  local content=""
 
   # --- Version check: manifest (preferred) or TTL (fallback) ---
   if _ensure_manifest 2>/dev/null; then
@@ -113,8 +115,7 @@ do_mental_model_recall() {
       local local_hash
       local_hash=$(cat "$hash_file" 2>/dev/null)
       if [ "$local_hash" = "$manifest_hash" ]; then
-        cat "$cache_file"
-        return 0
+        content=$(cat "$cache_file")
       fi
     fi
   else
@@ -124,27 +125,26 @@ do_mental_model_recall() {
       now=$(date +%s)
       file_age=$(stat -f %m "$cache_file" 2>/dev/null || stat -c %Y "$cache_file" 2>/dev/null || echo 0)
       if [ $((now - file_age)) -lt "$MENTAL_MODEL_CACHE_TTL" ]; then
-        cat "$cache_file"
-        return 0
+        content=$(cat "$cache_file")
       fi
     fi
   fi
 
   # --- Cache miss or stale: fetch from API ---
-  local max_time="${RECALL_CURL_MAX_TIME:-8}"
+  if [ -z "$content" ]; then
+    local max_time="${RECALL_CURL_MAX_TIME:-8}"
 
-  local auth_args=()
-  if [ -n "${N8N_HINDSIGHT_API_KEY:-}" ]; then
-    auth_args=(-H "Authorization: Bearer $N8N_HINDSIGHT_API_KEY")
-  fi
+    local auth_args=()
+    if [ -n "${N8N_HINDSIGHT_API_KEY:-}" ]; then
+      auth_args=(-H "Authorization: Bearer $N8N_HINDSIGHT_API_KEY")
+    fi
 
-  local result
-  result=$(curl -s --connect-timeout 2 --max-time "$max_time" \
-    "${auth_args[@]+"${auth_args[@]}"}" \
-    "${MENTAL_MODEL_URL}?tags=tag:${tag}" 2>/dev/null) || return 0
+    local result
+    result=$(curl -s --connect-timeout 2 --max-time "$max_time" \
+      "${auth_args[@]+"${auth_args[@]}"}" \
+      "${MENTAL_MODEL_URL}?tags=tag:${tag}" 2>/dev/null) || return 0
 
-  local content
-  content=$(echo "$result" | python3 -c "
+    content=$(echo "$result" | python3 -c "
 import json, sys
 try:
     data = json.loads(sys.stdin.read(), strict=False)
@@ -157,14 +157,23 @@ except Exception:
     pass
 " 2>/dev/null || true)
 
-  # Write to cache with content hash
-  if [ -n "$content" ]; then
-    mkdir -p "$MENTAL_MODEL_CACHE_DIR" 2>/dev/null
-    printf '%s' "$content" > "$cache_file" 2>/dev/null || true
-    printf '%s' "$content" | shasum -a 256 | cut -d' ' -f1 > "$hash_file" 2>/dev/null || true
+    # Write to cache with content hash
+    if [ -n "$content" ]; then
+      mkdir -p "$MENTAL_MODEL_CACHE_DIR" 2>/dev/null
+      printf '%s' "$content" > "$cache_file" 2>/dev/null || true
+      printf '%s' "$content" | shasum -a 256 | cut -d' ' -f1 > "$hash_file" 2>/dev/null || true
+    fi
   fi
 
-  echo "$content"
+  [ -z "$content" ] && return 0
+
+  # --- Section selection: inject only prompt-relevant sections (max ~4K) ---
+  local selector="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/lib/section_selector.py"
+  if [ -n "$prompt" ] && [ -f "$selector" ]; then
+    printf '%s' "$content" | python3 "$selector" "$prompt" 2>/dev/null || printf '%s' "$content"
+  else
+    printf '%s' "$content"
+  fi
 }
 
 do_gotcha_recall() {
