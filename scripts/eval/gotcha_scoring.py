@@ -91,7 +91,12 @@ def _load_workflow(wf_path: str | None) -> dict | None:
     if not wf_path:
         return None
     try:
-        return json.load(open(wf_path))
+        data = json.load(open(wf_path))
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict):
+            return None
+        return data
     except Exception:
         return None
 
@@ -360,7 +365,13 @@ def score_gotchas(results_dir: str, ground_truth_path: str) -> dict[str, dict]:
     Returns {cond -> {"addressed": int, "scored": int, "ran": int,
                        "deterministic": int, "heuristic": int, "details": [...]}}
     """
-    rules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gotcha_rules.jsonl")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    gt_stem = os.path.splitext(os.path.basename(ground_truth_path))[0]
+    standalone_rules = os.path.join(script_dir, f"{gt_stem}_rules_standalone.jsonl")
+    if os.path.exists(standalone_rules):
+        rules_path = standalone_rules
+    else:
+        rules_path = os.path.join(script_dir, "gotcha_rules.jsonl")
     rules = load_rules(rules_path)
     patterns = load_gotcha_patterns(ground_truth_path)
 
