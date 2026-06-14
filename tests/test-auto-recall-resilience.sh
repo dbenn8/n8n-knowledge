@@ -121,6 +121,37 @@ else
   fail "E3: gotcha observation lost provenance — no sources=\"2\" or sf link in hook output"
 fi
 
+# --- E4: gotcha recall is node-tagged (all_strict) + task-aware (Layer 2) ---
+# Task 5: do_gotcha_recall filters by ["node:X"] with tags_match=all_strict
+# ("all"/"any" include UNtagged memories by design and would re-admit the
+# cross-node Facebook/Salesforce noise), and folds the user's task keywords into
+# the query so dense nodes surface bugs relevant to THIS task. PROMPT mentions
+# "google sheet" — task keywords that are NOT node/service names, proving the
+# query is task-aware. Mental-model isolation (set above) routes every node
+# through gotcha recall so the request bodies are observable.
+E4_STDOUT="$(mktemp)"
+E4_BODY="$(mktemp)"
+TMP_FILES+=("$E4_STDOUT" "$E4_BODY")
+start_stub ok "$E4_STDOUT" "$E4_BODY"
+printf '{"prompt": "%s", "cwd": "%s"}' "$PROMPT" "$REPO" |
+  RECALL_URL="http://127.0.0.1:$STUB_PORT/recall" bash "$HOOK" > "$E4_STDOUT" 2>&1 || true
+kill "$STUB_PID" 2>/dev/null || true
+STUB_PID=""
+# Gotcha requests carry max_tokens 2000; count how many are strict + node-tagged.
+GOTCHA_N=$(grep -c '"max_tokens": 2000' "$E4_BODY" 2>/dev/null || echo 0)
+GOTCHA_STRICT=$(grep '"max_tokens": 2000' "$E4_BODY" 2>/dev/null | grep -c 'all_strict' || echo 0)
+GOTCHA_NODE=$(grep '"max_tokens": 2000' "$E4_BODY" 2>/dev/null | grep -c '"node:' || echo 0)
+if [ "$GOTCHA_N" -ge 2 ] && [ "$GOTCHA_STRICT" -eq "$GOTCHA_N" ] && [ "$GOTCHA_NODE" -eq "$GOTCHA_N" ]; then
+  pass "E4: every gotcha request is node-tagged + all_strict ($GOTCHA_N gotcha / $GOTCHA_STRICT strict / $GOTCHA_NODE node)"
+else
+  fail "E4: gotcha not node-tagged/all_strict (gotcha=$GOTCHA_N strict=$GOTCHA_STRICT node=$GOTCHA_NODE)"
+fi
+if grep '"max_tokens": 2000' "$E4_BODY" 2>/dev/null | grep -q 'sheet\|google'; then
+  pass "E4b: gotcha query is task-aware (prompt keyword present in a gotcha request)"
+else
+  fail "E4b: gotcha query not task-aware (no prompt keyword in gotcha request bodies)"
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

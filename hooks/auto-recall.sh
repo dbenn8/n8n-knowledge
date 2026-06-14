@@ -118,7 +118,7 @@ if [ -n "$NODE_TYPE" ]; then
   do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
   _gn=0
   for _nt in $UNCOVERED_NODES; do
-    do_gotcha_recall "$_nt" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
+    do_gotcha_recall "$_nt" "$PROMPT" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
     _gn=$((_gn + 1))
   done
   wait
