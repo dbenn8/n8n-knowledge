@@ -69,9 +69,10 @@ TMPFILE=$(mktemp)
 STRUCT_TMPFILE=$(mktemp)
 GOTCHA_TMPFILE=$(mktemp)
 GOTCHA_MULTI_DIR=$(mktemp -d)
-MM_DIR=$(mktemp -d)
-trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"; rm -rf "$GOTCHA_MULTI_DIR" "$MM_DIR"' EXIT
-do_recall "$PROMPT" "low" > "$TMPFILE"
+trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"; rm -rf "$GOTCHA_MULTI_DIR"' EXIT
+# Semantic recall is now Tier 2 (conditional): fired below only when Tier 1
+# (node-filtered gotcha + structured specs) is thin, or unconditionally when no
+# node is detected (semantic is then the only source). It no longer runs eagerly.
 
 # Check for node names in the prompt and do structured + gotcha recall if found
 # Also capture all detected nodes for DB schema injection
@@ -89,42 +90,24 @@ if hits:
 NODE_TYPE=$(echo "$NODE_DETECT" | sed -n '1p')
 NODE_TYPES=$(echo "$NODE_DETECT" | sed -n '2p')
 
-MM_CONTENT=""
 if [ -n "$NODE_TYPE" ]; then
-  # --- Phase 1: Mental models from local cache (instant, <100ms) ---
-  # Mental models are curated bug catalogs that change infrequently. Served from
-  # disk cache (~/.cache/n8n-knowledge/mental-models/) with version-aware
-  # invalidation via manifest (content hashes), falling back to 24h TTL.
-  # Nodes covered by a mental model skip the expensive gotcha recall.
   GOTCHA_NODE_CAP="${CLAUDE_PLUGIN_OPTION_GOTCHANODECAP:-3}"
-  UNCOVERED_NODES=""
+
+  # --- Tier 1 (always): node-filtered gotcha for EVERY detected node (capped) +
+  # structured node specs, in parallel. This is the high-signal tier. Mental
+  # models were removed — node-tagged + engagement-ranked gotcha recall replaces
+  # them (see plan 2026-06-13-version-aware-bug-tagging). ---
+  do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
   _gn=0
   for _nt in $NODE_TYPES; do
     [ "$_gn" -ge "$GOTCHA_NODE_CAP" ] && break
-    do_mental_model_recall "$_nt" "$PROMPT" > "$MM_DIR/$_gn.txt" 2>/dev/null
-    if [ -s "$MM_DIR/$_gn.txt" ]; then
-      _mc=$(cat "$MM_DIR/$_gn.txt")
-      [ -n "$_mc" ] && MM_CONTENT="${MM_CONTENT}${_mc}
-"
-    else
-      UNCOVERED_NODES="${UNCOVERED_NODES} ${_nt}"
-    fi
-    _gn=$((_gn + 1))
-  done
-
-  # --- Phase 2: Remote calls only for what's still needed ---
-  # Structured recall + gotcha (only for uncovered nodes) run in parallel with
-  # the semantic recall that was already started above.
-  do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
-  _gn=0
-  for _nt in $UNCOVERED_NODES; do
     do_gotcha_recall "$_nt" "$PROMPT" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
     _gn=$((_gn + 1))
   done
   wait
 
-  # Combine per-node gotcha results for uncovered nodes only.
-  if [ -z "$MM_CONTENT" ] && [ "$_gn" -gt 0 ]; then
+  # Combine per-node gotcha results (round-robin interleave, cap 5).
+  if [ "$_gn" -gt 0 ]; then
     python3 -c "
 import glob, json, sys
 combined, seen = [], set()
@@ -153,7 +136,23 @@ json.dump({'results': combined, 'source_facts': merged_sf}, open(sys.argv[2], 'w
 " "$GOTCHA_MULTI_DIR" "$GOTCHA_TMPFILE" 2>/dev/null || true
   fi
 
-  # Merge remaining recall streams.
+  # --- Tier 2 (conditional): semantic recall fires ONLY when Tier 1 is thin
+  # (< 2 results). When the node's known bugs + specs already answer the prompt,
+  # the broad semantic pass is mostly duplicate/low-signal community noise — so
+  # skip it and save the API call. ---
+  TIER1_COUNT=$(python3 -c "
+import json, sys
+def n(p):
+    try:
+        with open(p) as f: return len(json.load(f).get('results', []))
+    except Exception: return 0
+print(n(sys.argv[1]) + n(sys.argv[2]))
+" "$GOTCHA_TMPFILE" "$STRUCT_TMPFILE" 2>/dev/null || echo 0)
+  if [ "${TIER1_COUNT:-0}" -lt 2 ]; then
+    do_recall "$PROMPT" "low" > "$TMPFILE" 2>/dev/null || true
+  fi
+
+  # Merge recall streams (gotcha first, then semantic, then capped node specs).
   python3 -c "
 import json, sys
 
@@ -179,6 +178,9 @@ sem['source_facts'] = {
 with open(sys.argv[1], 'w') as f:
     json.dump(sem, f)
 " "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE" 2>/dev/null || true
+else
+  # No node detected — semantic recall is the only available source, so run it.
+  do_recall "$PROMPT" "low" > "$TMPFILE" 2>/dev/null || true
 fi
 
 # Inject compact node schema from nodes.db (valid operation enums per resource)
@@ -191,19 +193,8 @@ fi
 # Format and output results (pass CWD for .local.md config lookup)
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
-# Inject mental model content (curated bug catalog) before recall results.
-# Mental models are pre-distilled from the same recall data but with much higher
-# signal-to-noise ratio — they replace the noisy semantic gotcha recall.
-if [ -n "$MM_CONTENT" ]; then
-  MM_HEADER="## Known Issues (from curated knowledge base)
-IMPORTANT: Review these known bugs BEFORE choosing your node implementation. Design around confirmed issues — do not suggest the broken path.
-
-${MM_CONTENT}"
-  RESULT=$(HOOK_JSON_EXTRA="$MM_HEADER" python3 "$SCRIPT_DIR/lib/hook_json.py" prepend UserPromptSubmit <<< "$RESULT" 2>/dev/null || echo "$RESULT")
-fi
-
 # Cap recall-only context at MAX_CTX (10K) so large recall results never spill to a file.
-if [ -z "$DB_INJECT" ] && [ -z "$MM_CONTENT" ] && [ -n "$RESULT" ]; then
+if [ -z "$DB_INJECT" ] && [ -n "$RESULT" ]; then
   RESULT=$(python3 "$SCRIPT_DIR/lib/hook_json.py" cap <<< "$RESULT" 2>/dev/null || echo "$RESULT")
 fi
 

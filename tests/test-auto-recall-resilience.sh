@@ -59,12 +59,9 @@ start_stub() {
 
 echo "=== auto-recall resilience (E2E) tests ==="
 
-# Isolate from real mental-model cache/API so all nodes go through gotcha recall.
-MM_TMPDIR="$(mktemp -d)"
-TMP_FILES+=("$MM_TMPDIR")
-export MENTAL_MODEL_CACHE_DIR="$MM_TMPDIR"
-export MENTAL_MODEL_URL="http://127.0.0.1:1/nonexistent"
-export MENTAL_MODEL_MANIFEST_URL="http://127.0.0.1:1/nonexistent"
+# Mental models were removed (replaced by node-tagged + engagement-ranked gotcha
+# recall). Every detected node now goes through gotcha recall unconditionally —
+# no cache/API isolation needed anymore.
 
 # --- E1: gotcha results survive a dead semantic recall (sem-fail mode) ---
 E1_STDOUT="$(mktemp)"
@@ -150,6 +147,18 @@ if grep '"max_tokens": 2000' "$E4_BODY" 2>/dev/null | grep -q 'sheet\|google'; t
   pass "E4b: gotcha query is task-aware (prompt keyword present in a gotcha request)"
 else
   fail "E4b: gotcha query not task-aware (no prompt keyword in gotcha request bodies)"
+fi
+
+# --- E5: Tier 2 semantic recall is SKIPPED when Tier 1 has >= 2 results ---
+# In ok mode Tier 1 (gotcha + structured) returns results, so the conditional
+# semantic pass must NOT fire. A semantic request carries neither the gotcha
+# marker ("max_tokens": 2000) nor the structured marker ("tags_match"), but does
+# carry a "query". Reuses the body log captured by the E4 run above.
+SEM_REQS=$(grep '"query"' "$E4_BODY" 2>/dev/null | grep -cvE '"max_tokens": 2000|"tags_match"' || true)
+if [ "${SEM_REQS:-0}" -eq 0 ]; then
+  pass "E5: Tier 2 semantic recall skipped when Tier 1 sufficient (0 semantic requests)"
+else
+  fail "E5: Tier 2 semantic recall fired despite sufficient Tier 1 ($SEM_REQS semantic requests)"
 fi
 
 echo ""
