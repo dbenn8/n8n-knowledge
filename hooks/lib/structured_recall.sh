@@ -47,6 +47,49 @@ print(MAP.get(tag, tag))
 }
 
 MENTAL_MODEL_URL="${MENTAL_MODEL_URL:-https://n8nhindsight.applikuapp.com/public/mental-models}"
+MENTAL_MODEL_CACHE_DIR="${MENTAL_MODEL_CACHE_DIR:-${HOME}/.cache/n8n-knowledge/mental-models}"
+MENTAL_MODEL_CACHE_TTL="${MENTAL_MODEL_CACHE_TTL:-86400}"  # 24h default
+MENTAL_MODEL_MANIFEST_URL="${MENTAL_MODEL_MANIFEST_URL:-${MENTAL_MODEL_URL}/manifest}"
+MENTAL_MODEL_MANIFEST_TTL="${MENTAL_MODEL_MANIFEST_TTL:-3600}"  # 1h default
+
+# Fetch manifest if stale/missing, cache to disk. Returns 0 if manifest is available.
+_ensure_manifest() {
+  local manifest_file="${MENTAL_MODEL_CACHE_DIR}/manifest.json"
+  if [ -f "$manifest_file" ]; then
+    local now file_age
+    now=$(date +%s)
+    file_age=$(stat -f %m "$manifest_file" 2>/dev/null || stat -c %Y "$manifest_file" 2>/dev/null || echo 0)
+    if [ $((now - file_age)) -lt "$MENTAL_MODEL_MANIFEST_TTL" ]; then
+      return 0
+    fi
+  fi
+
+  local auth_args=()
+  if [ -n "${N8N_HINDSIGHT_API_KEY:-}" ]; then
+    auth_args=(-H "Authorization: Bearer $N8N_HINDSIGHT_API_KEY")
+  fi
+
+  local result
+  result=$(curl -s --connect-timeout 2 --max-time 5 \
+    "${auth_args[@]+"${auth_args[@]}"}" \
+    "${MENTAL_MODEL_MANIFEST_URL}" 2>/dev/null) || return 1
+
+  echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'models' in d" 2>/dev/null || return 1
+  mkdir -p "$MENTAL_MODEL_CACHE_DIR" 2>/dev/null
+  printf '%s' "$result" > "$manifest_file" 2>/dev/null || return 1
+}
+
+# Get the content_hash for a tag from the cached manifest. Empty if not found.
+_manifest_hash() {
+  local tag="$1"
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f)
+h = m.get('models', {}).get(sys.argv[2], {}).get('content_hash', '')
+if h: print(h)
+" "${MENTAL_MODEL_CACHE_DIR}/manifest.json" "$tag" 2>/dev/null
+}
 
 do_mental_model_recall() {
   local node_type="$1"
@@ -56,6 +99,38 @@ do_mental_model_recall() {
   local tag
   tag=$(_node_to_community_tag "$service")
 
+  local cache_file="${MENTAL_MODEL_CACHE_DIR}/${tag}.md"
+  local hash_file="${MENTAL_MODEL_CACHE_DIR}/${tag}.hash"
+
+  # --- Version check: manifest (preferred) or TTL (fallback) ---
+  if _ensure_manifest 2>/dev/null; then
+    local manifest_hash
+    manifest_hash=$(_manifest_hash "$tag")
+    if [ -z "$manifest_hash" ]; then
+      return 0
+    fi
+    if [ -f "$cache_file" ] && [ -f "$hash_file" ]; then
+      local local_hash
+      local_hash=$(cat "$hash_file" 2>/dev/null)
+      if [ "$local_hash" = "$manifest_hash" ]; then
+        cat "$cache_file"
+        return 0
+      fi
+    fi
+  else
+    # Manifest unavailable — fall back to TTL
+    if [ -f "$cache_file" ]; then
+      local now file_age
+      now=$(date +%s)
+      file_age=$(stat -f %m "$cache_file" 2>/dev/null || stat -c %Y "$cache_file" 2>/dev/null || echo 0)
+      if [ $((now - file_age)) -lt "$MENTAL_MODEL_CACHE_TTL" ]; then
+        cat "$cache_file"
+        return 0
+      fi
+    fi
+  fi
+
+  # --- Cache miss or stale: fetch from API ---
   local max_time="${RECALL_CURL_MAX_TIME:-8}"
 
   local auth_args=()
@@ -68,18 +143,28 @@ do_mental_model_recall() {
     "${auth_args[@]+"${auth_args[@]}"}" \
     "${MENTAL_MODEL_URL}?tags=tag:${tag}" 2>/dev/null) || return 0
 
-  echo "$result" | python3 -c "
+  local content
+  content=$(echo "$result" | python3 -c "
 import json, sys
 try:
     data = json.loads(sys.stdin.read(), strict=False)
     items = data.get('items', [])
     if items:
         c = items[0].get('content', '')
-        if c:
+        if c and c != 'Generating content...':
             print(c)
 except Exception:
     pass
-" 2>/dev/null || true
+" 2>/dev/null || true)
+
+  # Write to cache with content hash
+  if [ -n "$content" ]; then
+    mkdir -p "$MENTAL_MODEL_CACHE_DIR" 2>/dev/null
+    printf '%s' "$content" > "$cache_file" 2>/dev/null || true
+    printf '%s' "$content" | shasum -a 256 | cut -d' ' -f1 > "$hash_file" 2>/dev/null || true
+  fi
+
+  echo "$content"
 }
 
 do_gotcha_recall() {

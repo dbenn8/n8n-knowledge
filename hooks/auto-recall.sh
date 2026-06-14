@@ -91,39 +91,40 @@ NODE_TYPES=$(echo "$NODE_DETECT" | sed -n '2p')
 
 MM_CONTENT=""
 if [ -n "$NODE_TYPE" ]; then
-  # Run node-spec, gotcha, and mental model recalls in parallel.
-  # Gotcha recall covers ALL detected node types (capped), not just the first:
-  # querying only the first detection missed the Merge row-loss gotcha when
-  # ZeroBounce happened to be detected first (eval prompt 122). Each curl has a
-  # hard max-time (recall_common.sh) and they run concurrently, so the cap
-  # bounds context size, not wall-clock time.
+  # --- Phase 1: Mental models from local cache (instant, <100ms) ---
+  # Mental models are curated bug catalogs that change infrequently. Served from
+  # disk cache (~/.cache/n8n-knowledge/mental-models/) with version-aware
+  # invalidation via manifest (content hashes), falling back to 24h TTL.
+  # Nodes covered by a mental model skip the expensive gotcha recall.
   GOTCHA_NODE_CAP="${CLAUDE_PLUGIN_OPTION_GOTCHANODECAP:-3}"
-  do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
+  UNCOVERED_NODES=""
   _gn=0
   for _nt in $NODE_TYPES; do
     [ "$_gn" -ge "$GOTCHA_NODE_CAP" ] && break
+    do_mental_model_recall "$_nt" > "$MM_DIR/$_gn.txt" 2>/dev/null
+    if [ -s "$MM_DIR/$_gn.txt" ]; then
+      _mc=$(cat "$MM_DIR/$_gn.txt")
+      [ -n "$_mc" ] && MM_CONTENT="${MM_CONTENT}${_mc}
+"
+    else
+      UNCOVERED_NODES="${UNCOVERED_NODES} ${_nt}"
+    fi
+    _gn=$((_gn + 1))
+  done
+
+  # --- Phase 2: Remote calls only for what's still needed ---
+  # Structured recall + gotcha (only for uncovered nodes) run in parallel with
+  # the semantic recall that was already started above.
+  do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
+  _gn=0
+  for _nt in $UNCOVERED_NODES; do
     do_gotcha_recall "$_nt" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
-    do_mental_model_recall "$_nt" > "$MM_DIR/$_gn.txt" 2>/dev/null &
     _gn=$((_gn + 1))
   done
   wait
 
-  # Collect mental model content. If any node has a mental model, it replaces
-  # the noisy semantic gotcha recall for that node — mental models are curated
-  # bug catalogs pre-distilled from the same recall data.
-  MM_CONTENT=""
-  for _mmf in "$MM_DIR"/*.txt; do
-    [ -s "$_mmf" ] || continue
-    _mc=$(cat "$_mmf")
-    [ -n "$_mc" ] && MM_CONTENT="${MM_CONTENT}${_mc}
-"
-  done
-
-  # Combine per-node gotcha results: round-robin across nodes (so the first
-  # detected node cannot crowd out the others), dedup, cap 5 total — same cap
-  # the single-node version had.
-  # Skip if mental models covered all nodes (mental models supersede gotcha recall).
-  if [ -z "$MM_CONTENT" ]; then
+  # Combine per-node gotcha results for uncovered nodes only.
+  if [ -z "$MM_CONTENT" ] && [ "$_gn" -gt 0 ]; then
     python3 -c "
 import glob, json, sys
 combined, seen = [], set()
@@ -134,9 +135,6 @@ for path in sorted(glob.glob(sys.argv[1] + '/*.json')):
         with open(path) as f:
             doc = json.load(f)
         buckets.append(doc.get('results', []))
-        # Accumulate the per-node source_facts dict so observation provenance
-        # (URLs/engagement) survives the gotcha combine — the renderer resolves
-        # source_fact_ids against this merged dict.
         merged_sf.update(doc.get('source_facts') or {})
     except Exception:
         pass
@@ -155,10 +153,7 @@ json.dump({'results': combined, 'source_facts': merged_sf}, open(sys.argv[2], 'w
 " "$GOTCHA_MULTI_DIR" "$GOTCHA_TMPFILE" 2>/dev/null || true
   fi
 
-  # Merge: gotchas FIRST (highest priority), then semantic, then capped node specs.
-  # Every stream is loaded independently — a timed-out semantic recall must NOT
-  # discard the gotcha/spec results (the old all-or-nothing try block did
-  # exactly that whenever the semantic call failed under endpoint load).
+  # Merge remaining recall streams.
   python3 -c "
 import json, sys
 
@@ -175,12 +170,7 @@ gotcha_doc = load_results(sys.argv[3])
 struct_results = struct_doc.get('results', [])[:5]
 gotcha_results = gotcha_doc.get('results', [])[:5]
 sem_results = sem.get('results', [])
-# Order: gotchas (bugs/issues) → semantic (docs/community) → node specs (reference)
 sem['results'] = gotcha_results + sem_results + struct_results
-# Merge source_facts across all three streams so observations arriving via the
-# gotcha/structured channels keep their provenance (URLs/engagement). Semantic
-# wins key collisions (ids are UUIDs — collisions are theoretical). A dead
-# stream contributes an empty dict, so the per-stream tolerance is preserved.
 sem['source_facts'] = {
     **(struct_doc.get('source_facts') or {}),
     **(gotcha_doc.get('source_facts') or {}),
