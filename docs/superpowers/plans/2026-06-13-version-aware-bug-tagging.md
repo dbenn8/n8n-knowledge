@@ -59,9 +59,15 @@ The 5 curated known-bug memories retained during the 2026-06-14 test would pollu
 
 ### Task 1: Add automated `node:X` tagging to GitHub-issue sync
 
+> **⚠️ FINDINGS (2026-06-15) — needs Dan's decision before touching the production ingest path.** Inspected `n8n-hindsight/scripts/sync-github.py`:
+> - **Insertion point is clean:** `format_item()` (lines 166–206) builds `tags`/`metadata` and has `title`, `body`, `reactions`, `comments` in scope. `--dry-run` exists (fetch+filter, no retain). Engagement floor = 5 is easy: `reactions_total + comments*4 >= 5` gates whether to add `node:X` tags.
+> - **`identify_nodes()` works on issue text** — probed: "Official Supabase node rejects credentials" → `nodes-base.supabase` ✓, "Merge node silently loses rows" → `nodes-base.merge` ✓, "Wait node never resumes" → `nodes-base.wait` ✓.
+> - **BUT correctness blocker:** the n8n-hindsight node_lookup is a **divergent copy** (`.worktrees/n8n-knowledge-validator-preflight/hooks/lib/node_lookup.py`) that still has the **verb/demotion false-positive** — "Improve editor performance for large **workflows**" → `nodes-base.workflowTrigger` (wrong). The plugin's `node_lookup.py` already fixed this (verb-suffix stripping + `_DEMOTED_BARE_TOKENS` in fuzzy). Tagging 4,500 issues with the buggy copy would stamp false `node:*` tags.
+> - **Decision needed (the open "which source" question, now with teeth):** (a) regenerate `node_lookup_data.json` from `nodes.db` via `sync-nodes.py --refresh-lookup` AND use the **fixed** detection logic, vs (b) reconcile the two `node_lookup.py` copies into one shared module first. Either way, resolve the divergence before a production write. Left unbuilt deliberately — server-side prod write + unresolved sourcing is Dan's call.
+
 **Files:**
-- Modify: `n8n-hindsight/scripts/sync-github.py` (issue ingestion — add node-detection pass)
-- Reference: `n8n-knowledge/hooks/lib/node_lookup.py` (3,537-entry detection dict — the source of truth)
+- Modify: `n8n-hindsight/scripts/sync-github.py` (issue ingestion — add node-detection pass in `format_item`)
+- Reference: `n8n-knowledge/hooks/lib/node_lookup.py` (FIXED detection logic — has verb-stem + demotion fixes)
 
 The generalizable relevance mechanism: run each issue's title + body through node-detection and attach `node:X` tags for every node mentioned. This tags the whole corpus, not a curated subset.
 
