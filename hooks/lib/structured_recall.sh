@@ -23,6 +23,65 @@ do_structured_recall() {
     "$query_escaped" "$tags_json")"
 }
 
+_node_to_community_tag() {
+  local service="$1"
+  local tag
+  tag=$(echo "$service" | python3 -c "
+import re, sys
+s = sys.stdin.read().strip()
+# camelCase to kebab-case
+tag = re.sub(r'([a-z])([A-Z])', r'\1-\2', s).lower()
+# Known mappings where the community tag diverges from the node name
+MAP = {
+    'open-ai': 'openai', 'lm-chat-open-ai': 'openai',
+    'lm-open-ai': 'openai', 'open-ai-assistant': 'openai',
+    'http-request': 'http-request',
+    'split-in-batches': 'split-in-batches',
+    'execute-workflow': 'execute-workflow',
+    'schedule-trigger': 'schedule-trigger',
+    'form-trigger': 'form-trigger',
+}
+print(MAP.get(tag, tag))
+")
+  echo "$tag"
+}
+
+MENTAL_MODEL_URL="${MENTAL_MODEL_URL:-https://n8nhindsight.applikuapp.com/public/mental-models}"
+
+do_mental_model_recall() {
+  local node_type="$1"
+
+  local service
+  service=$(echo "$node_type" | sed 's/.*\.//' | sed 's/Trigger$//' | sed 's/Tool$//')
+  local tag
+  tag=$(_node_to_community_tag "$service")
+
+  local max_time="${RECALL_CURL_MAX_TIME:-8}"
+
+  local auth_args=()
+  if [ -n "${N8N_HINDSIGHT_API_KEY:-}" ]; then
+    auth_args=(-H "Authorization: Bearer $N8N_HINDSIGHT_API_KEY")
+  fi
+
+  local result
+  result=$(curl -s --connect-timeout 2 --max-time "$max_time" \
+    "${auth_args[@]+"${auth_args[@]}"}" \
+    "${MENTAL_MODEL_URL}?tags=tag:${tag}" 2>/dev/null) || return 0
+
+  echo "$result" | python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read(), strict=False)
+    items = data.get('items', [])
+    if items:
+        c = items[0].get('content', '')
+        if c:
+            print(c)
+except Exception:
+    pass
+" 2>/dev/null || true
+}
+
 do_gotcha_recall() {
   local node_type="$1"
   local service

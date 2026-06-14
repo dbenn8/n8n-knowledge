@@ -69,7 +69,8 @@ TMPFILE=$(mktemp)
 STRUCT_TMPFILE=$(mktemp)
 GOTCHA_TMPFILE=$(mktemp)
 GOTCHA_MULTI_DIR=$(mktemp -d)
-trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"; rm -rf "$GOTCHA_MULTI_DIR"' EXIT
+MM_DIR=$(mktemp -d)
+trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"; rm -rf "$GOTCHA_MULTI_DIR" "$MM_DIR"' EXIT
 do_recall "$PROMPT" "low" > "$TMPFILE"
 
 # Check for node names in the prompt and do structured + gotcha recall if found
@@ -88,8 +89,9 @@ if hits:
 NODE_TYPE=$(echo "$NODE_DETECT" | sed -n '1p')
 NODE_TYPES=$(echo "$NODE_DETECT" | sed -n '2p')
 
+MM_CONTENT=""
 if [ -n "$NODE_TYPE" ]; then
-  # Run node-spec and gotcha recalls in parallel.
+  # Run node-spec, gotcha, and mental model recalls in parallel.
   # Gotcha recall covers ALL detected node types (capped), not just the first:
   # querying only the first detection missed the Merge row-loss gotcha when
   # ZeroBounce happened to be detected first (eval prompt 122). Each curl has a
@@ -101,14 +103,28 @@ if [ -n "$NODE_TYPE" ]; then
   for _nt in $NODE_TYPES; do
     [ "$_gn" -ge "$GOTCHA_NODE_CAP" ] && break
     do_gotcha_recall "$_nt" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
+    do_mental_model_recall "$_nt" > "$MM_DIR/$_gn.txt" 2>/dev/null &
     _gn=$((_gn + 1))
   done
   wait
 
+  # Collect mental model content. If any node has a mental model, it replaces
+  # the noisy semantic gotcha recall for that node — mental models are curated
+  # bug catalogs pre-distilled from the same recall data.
+  MM_CONTENT=""
+  for _mmf in "$MM_DIR"/*.txt; do
+    [ -s "$_mmf" ] || continue
+    _mc=$(cat "$_mmf")
+    [ -n "$_mc" ] && MM_CONTENT="${MM_CONTENT}${_mc}
+"
+  done
+
   # Combine per-node gotcha results: round-robin across nodes (so the first
   # detected node cannot crowd out the others), dedup, cap 5 total — same cap
   # the single-node version had.
-  python3 -c "
+  # Skip if mental models covered all nodes (mental models supersede gotcha recall).
+  if [ -z "$MM_CONTENT" ]; then
+    python3 -c "
 import glob, json, sys
 combined, seen = [], set()
 buckets = []
@@ -137,6 +153,7 @@ while len(combined) < 5 and any(len(b) > i for b in buckets):
     i += 1
 json.dump({'results': combined, 'source_facts': merged_sf}, open(sys.argv[2], 'w'))
 " "$GOTCHA_MULTI_DIR" "$GOTCHA_TMPFILE" 2>/dev/null || true
+  fi
 
   # Merge: gotchas FIRST (highest priority), then semantic, then capped node specs.
   # Every stream is loaded independently — a timed-out semantic recall must NOT
@@ -184,8 +201,19 @@ fi
 # Format and output results (pass CWD for .local.md config lookup)
 RESULT=$(format_recall_results "$TMPFILE" "$CWD")
 
+# Inject mental model content (curated bug catalog) before recall results.
+# Mental models are pre-distilled from the same recall data but with much higher
+# signal-to-noise ratio — they replace the noisy semantic gotcha recall.
+if [ -n "$MM_CONTENT" ]; then
+  MM_HEADER="## Known Issues (from curated knowledge base)
+IMPORTANT: Review these known bugs BEFORE choosing your node implementation. Design around confirmed issues — do not suggest the broken path.
+
+${MM_CONTENT}"
+  RESULT=$(HOOK_JSON_EXTRA="$MM_HEADER" python3 "$SCRIPT_DIR/lib/hook_json.py" prepend UserPromptSubmit <<< "$RESULT" 2>/dev/null || echo "$RESULT")
+fi
+
 # Cap recall-only context at MAX_CTX (10K) so large recall results never spill to a file.
-if [ -z "$DB_INJECT" ] && [ -n "$RESULT" ]; then
+if [ -z "$DB_INJECT" ] && [ -z "$MM_CONTENT" ] && [ -n "$RESULT" ]; then
   RESULT=$(python3 "$SCRIPT_DIR/lib/hook_json.py" cap <<< "$RESULT" 2>/dev/null || echo "$RESULT")
 fi
 
