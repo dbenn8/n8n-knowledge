@@ -301,9 +301,26 @@ def _check_param(workflow: dict, rule: dict) -> tuple[bool, str]:
                 elif mode:
                     all_ok = False
                     reasons.append(f"webhook responseMode='{mode}' (may fire before processing)")
-                # If responseMode not set, it defaults to immediate — that's the bug
                 elif not mode and "trigger" not in node.get("type", "").lower():
-                    pass  # Non-trigger webhooks may not have this param
+                    pass
+
+        elif check_name == "merge_uses_keyed_mode":
+            for node in matching_nodes:
+                params = node.get("parameters", {})
+                mode = params.get("mode", "")
+                combo = params.get("combinationMode", "")
+                has_key = bool(
+                    params.get("mergeByFields")
+                    or params.get("fieldsToMatch")
+                    or combo == "mergeByFields"
+                )
+                if has_key:
+                    reasons.append(f"merge uses keyed mode ({combo or mode})")
+                elif mode == "combine" and not has_key:
+                    all_ok = False
+                    reasons.append(f"merge uses positional combine (timing hazard)")
+                else:
+                    reasons.append(f"merge mode='{mode}' (non-positional)")
 
     return all_ok, "; ".join(reasons) if reasons else "param checks passed"
 
