@@ -173,7 +173,11 @@ def identify_nodes(prompt):
             node_ctx = r"\b" + re.escape(name) + r"\s+node\b"
             if not re.search(node_ctx, pl):
                 continue
-        pattern = r"\b" + re.escape(name) + r"\b"
+        # Single-word keys also match common verb forms (merges, filtered, etc.)
+        if " " not in name:
+            pattern = r"\b" + re.escape(name) + r"(?:es|ed|ing|s|d)?\b"
+        else:
+            pattern = r"\b" + re.escape(name) + r"\b"
         m = re.search(pattern, pl)
         if m:
             nt = lookup[name]

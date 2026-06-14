@@ -146,6 +146,24 @@ cases.append(('G_merges_no_workflow',
 cases.append(('G_splits_no_false_positive',
     len(types('splits items into batches')) == 0))
 
+# Defect G: verb forms must be detected ALONGSIDE other nodes (not just solo).
+# This is the actual eval failure: 'webhook ... merges' detected only webhook.
+t = types('receive webhook data then merges them together by product ID')
+cases.append(('G_verb_with_other_nodes_merge',
+    'nodes-base.merge' in t))
+cases.append(('G_verb_with_other_nodes_webhook',
+    'nodes-base.webhook' in t))
+
+# Defect H: model-name aliases resolve to OpenAI node.
+cases.append(('H_gpt4o_finds_openai',
+    'nodes-base.openAi' in types('check blog posts with GPT-4o before publishing')))
+cases.append(('H_chatgpt_finds_openai',
+    'nodes-base.openAi' in types('use ChatGPT to summarize the article')))
+cases.append(('H_dalle_finds_openai',
+    'nodes-base.openAi' in types('generate an image with DALL-E 3')))
+cases.append(('H_gpt4_finds_openai',
+    'nodes-base.openAi' in types('send the text to GPT-4 for analysis')))
+
 for name, ok in cases:
     print(f'{name}|{\"PASS\" if ok else \"FAIL\"}')
 " > "$TMPOUT2"
