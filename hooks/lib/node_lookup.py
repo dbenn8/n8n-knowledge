@@ -211,6 +211,11 @@ def identify_nodes(prompt):
             if w.endswith("ing") and len(w) > 5:
                 stems.append(w[:-3])
             for stem in stems:
+                # A stem that lands on a demoted/common bare token (e.g. the
+                # plural "workflows" -> "workflow" -> workflowTrigger) must NOT
+                # match — the original-word guard above only saw "workflows".
+                if stem in _COMMON_WORDS or stem in _DEMOTED_BARE_TOKENS:
+                    continue
                 if stem in lookup:
                     nt = lookup[stem]
                     hits.append((stem, nt))

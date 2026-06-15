@@ -87,6 +87,17 @@ cases.append(('B_build_prompt_no_workflowtrigger', 'nodes-base.workflowTrigger' 
 cases.append(('E_explicit_workflow_trigger',
     'nodes-base.workflowTrigger' in types('add a workflow trigger node')))
 
+# Defect H: the PLURAL 'workflows' must NOT stem to 'workflow' -> workflowTrigger.
+# 'workflow' is demoted, but the Pass-2 verb/plural stemmer matched the stem
+# without re-checking the demotion list. This matters doubly for ingest-side
+# node-tagging: thousands of issues mention 'workflows' in passing and would be
+# falsely stamped node:workflowTrigger.
+cases.append(('H_plural_workflows_no_workflowtrigger',
+    'nodes-base.workflowTrigger' not in types('improve editor performance for large workflows')))
+cases.append(('H_plural_workflows_with_real_node',
+    'nodes-base.merge' in types('the merge node loses rows across large workflows')
+    and 'nodes-base.workflowTrigger' not in types('the merge node loses rows across large workflows')))
+
 # Defect C: event-phrasing trigger word 'added' upgrades to the trigger node.
 cases.append(('C_added_yields_sheets_trigger',
     'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
