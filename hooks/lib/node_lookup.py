@@ -55,6 +55,58 @@ def _load():
     return _DATA
 
 
+# --- English-word oracle (task #84 general FP rules R1/R2) -------------------
+# A common-English-word set, shipped as a gzipped DATA file (node_lookup_words.txt.gz,
+# regenerable from /usr/share/dict/words: lowercase, alpha, len 4-15 — NOT hash-pinned,
+# like node_lookup_data.json). Used to tell a real English word (extract, custom,
+# current) apart from a distinctive node name (supabase, mcp, posta). LAZY-loaded only
+# when an R1/R2 check actually needs it — most prompts match a first-party node via the
+# Pass-1 exact path and never touch it. Missing file => empty set => rules no-op
+# (graceful degradation to the prior behavior).
+_WORDS = None
+
+
+def _english_words():
+    global _WORDS
+    if _WORDS is None:
+        path = os.path.join(_DIR, "node_lookup_words.txt.gz")
+        try:
+            import gzip
+            with gzip.open(path, "rt") as f:
+                _WORDS = frozenset(f.read().split())
+        except Exception:
+            _WORDS = frozenset()
+    return _WORDS
+
+
+def _is_english_word(tok):
+    return tok.lower() in _english_words()
+
+
+def _is_first_party(node_type):
+    """First-party = n8n's own scopes (nodes-base + langchain). Everything else is a
+    third-party community package, which needs a distinctive (non-dictionary) name or
+    an explicit '<name> node' reference to match — see _r2_demote."""
+    scope = node_type.split(".")[0].lower()
+    return scope in ("nodes-base", "n8n-nodes-base") or "langchain" in scope
+
+
+def _r2_demote(name, node_type):
+    """R2: an exact/suffix match to a THIRD-PARTY node whose single-word key is a
+    common English word is demoted (require '<name> node'). Kills search/consolidate/
+    reply/buffer-style collisions generally; preserves first-party (agent/chat/merge)
+    and distinctive third-party (mcp/deepseek/supabase) names."""
+    return " " not in name and not _is_first_party(node_type) and _is_english_word(name)
+
+
+def _despaced_contains(haystack, needle):
+    """True if `needle` appears in `haystack` once separators are stripped — i.e. the
+    node name is genuinely present, just spelled with spaces/punctuation ('Rabbit MQ'
+    -> rabbitmq). Guards the R1 fuzzy suppressor from killing real spaced node refs."""
+    flat = re.sub(r"[^a-z0-9]", "", haystack.lower())
+    return needle.lower() in flat
+
+
 _TRIGGER_WORDS = {
     "trigger", "listen", "watch", "fire", "event",
     "poll", "subscribe", "detect", "monitor",
@@ -238,6 +290,13 @@ def identify_nodes(prompt):
         m = re.search(pattern, pl)
         if m:
             nt = lookup[name]
+            # R2 (general): a bare exact/suffix match to a THIRD-PARTY node whose
+            # single-word key is a common English word needs an explicit
+            # "<name> node" reference. Checked only AFTER a match (so the English-
+            # word set lazy-loads rarely, not for every candidate key).
+            if _r2_demote(name, nt) and not re.search(
+                    r"\b" + re.escape(name) + r"\s+node\b", pl):
+                continue
             suffix = nt.split(".")[-1].lower()
             base = re.sub(r"trigger$", "", suffix)
             # Trigger intent is scoped LOCALLY to this match's span, not
@@ -277,26 +336,44 @@ def identify_nodes(prompt):
                     continue
                 if stem in lookup:
                     nt = lookup[stem]
+                    # R2 applies here too — otherwise a third-party node demoted in
+                    # Pass-1 gets silently re-added via this exact-stem path.
+                    if _r2_demote(stem, nt) and not re.search(
+                            r"\b" + re.escape(stem) + r"\s+node\b", pl):
+                        continue
                     hits.append((stem, nt))
                     break
             if hits:
                 break
-            # Original fuzzy similarity check (for typos). Min length 5: 4-char
-            # words fuzzy-match rare nodes too readily (1-char edit gives ratio
-            # ~0.89), e.g. "host"->ghost, "post"->posta. Real node-name typos are
-            # >=5 chars; short stems stay exact. (Consistent with the suffix /
-            # stemmer length-gating above; broader noise = task #84.)
-            if len(w) >= 5:
+            # Fuzzy similarity check (for typos like "slak"->slack), min 4 chars.
+            # The general R1 dict-suppressor below kills coincidental matches whose
+            # SOURCE is a real English word (host->ghost, post->posta), so the gate
+            # stays at 4 and still corrects genuine (non-dictionary) typos. (The
+            # per-word _COMMON_WORDS host/post entries are now redundant with R1.)
+            if len(w) >= 4:
                 best, best_score = None, 0.0
                 for name in lookup:
                     if len(name) < 4 or " " in name:
                         continue
                     if name in _COMMON_WORDS or name in _DEMOTED_BARE_TOKENS:
                         continue
+                    # R2-demoted third-party dict-word nodes are not valid fuzzy
+                    # candidates either (else "consolidate" fuzzy-matches itself at
+                    # ratio 1.0 and the R1 despaced-guard keeps it).
+                    if _r2_demote(name, lookup[name]):
+                        continue
                     ratio = _similarity(w, name)
                     if ratio > best_score:
                         best, best_score = name, ratio
                 if best_score >= 0.85:
+                    # R1 (general): a fuzzy match whose SOURCE word is a real English
+                    # word is almost always coincidence (custom->customer,
+                    # extract->extruct, table->teable), not a typo — suppress it. Real
+                    # node-name typos ("slak", "githb") are not dictionary words.
+                    # Guard: keep it if the node name IS genuinely present, just
+                    # spelled with separators ("Rabbit MQ" -> rabbitmq).
+                    if _is_english_word(w) and not _despaced_contains(prompt, best):
+                        continue
                     hits.append((best, lookup[best]))
                     break
 

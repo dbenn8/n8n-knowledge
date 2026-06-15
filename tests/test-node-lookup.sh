@@ -258,6 +258,34 @@ cases.append(('I_inbox_demoted_webhook_kept',
     '@inboxapp/n8n-nodes-inboxapp.inboxApp' not in types('Webhook inbox not receiving')
     and 'nodes-base.webhook' in types('Webhook inbox not receiving')))
 
+# Defect J: GENERAL rules (task #84) — driven by the English-word oracle +
+# first-party-vs-third-party scope, NOT a hand list. These corpus FP cases were
+# NEVER added to _COMMON_WORDS/_DEMOTED, so passing proves the rules GENERALIZE.
+#   R1: fuzzy match whose SOURCE word is a dictionary word -> suppress.
+#   R2: exact match to a THIRD-PARTY node whose key is a dictionary word -> demote.
+cases.append(('J_extract_no_extruct',  # R1: extract->extruct (fuzzy, dict source)
+    len(types('Out of Memory using Extract from File node')) == 0))
+cases.append(('J_table_no_teable',     # R1: table->teable
+    '@teable' not in str(types('Account for pending CSV uploads in data-table budget'))))
+cases.append(('J_context_no_qontext',  # R1: context->qontext
+    'qontext' not in str(types('support context caching in Google Vertex model'))))
+cases.append(('J_custom_no_customerio',  # R1: custom->customerIo (FIRST-PARTY, still FP)
+    'nodes-base.customerIo' not in types('Fix custom node icon path resolution')))
+cases.append(('J_consolidate_demoted',  # R2: third-party + dict key -> demote bare
+    len(types('Consolidate native tools into action families')) == 0))
+cases.append(('J_consolidate_node_resolves',  # R2 preserves explicit '<name> node'
+    'consolidate' in str(types('set up the consolidate node'))))
+cases.append(('J_reply_no_replyio',    # R2: reply->@replyio (third-party, dict)
+    '@replyio' not in str(types('Add in-reply-to and references to reply emails'))))
+cases.append(('J_rabbitmq_spaced_kept',  # R1 despaced-guard: real spaced node name
+    'nodes-base.rabbitmq' in types('Rabbit MQ triggers do not work in test mode')))
+cases.append(('J_typo_slak_still_corrects',  # R1 allows NON-dict typo (eval #46)
+    'nodes-base.slack' in types('slak node auth fails')))
+cases.append(('J_distinctive_3p_kept',  # non-dict third-party name still resolves bare
+    'n8n-nodes-mcp.mcp' in types('MCP server trigger stops working')))
+cases.append(('J_langchain_agent_kept',  # first-party langchain dict-word name kept
+    'nodes-langchain.agent' in types('AI Agent does not store tool usage in memory')))
+
 for name, ok in cases:
     print(f'{name}|{"PASS" if ok else "FAIL"}')
 PYEOF
