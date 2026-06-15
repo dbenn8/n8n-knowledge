@@ -57,43 +57,36 @@ The 5 curated known-bug memories retained during the 2026-06-14 test would pollu
 
 ---
 
-### Task 1: Add automated `node:X` tagging to GitHub-issue sync
+### Task 1: Wire the canonical node detector into GitHub sync (node:X tagging)
 
-> **⚠️ FINDINGS (2026-06-15) — needs Dan's decision before touching the production ingest path.** Inspected `n8n-hindsight/scripts/sync-github.py`:
-> - **Insertion point is clean:** `format_item()` (lines 166–206) builds `tags`/`metadata` and has `title`, `body`, `reactions`, `comments` in scope. `--dry-run` exists (fetch+filter, no retain). Engagement floor = 5 is easy: `reactions_total + comments*4 >= 5` gates whether to add `node:X` tags.
-> - **`identify_nodes()` works on issue text** — probed: "Official Supabase node rejects credentials" → `nodes-base.supabase` ✓, "Merge node silently loses rows" → `nodes-base.merge` ✓, "Wait node never resumes" → `nodes-base.wait` ✓.
-> - **BUT correctness blocker:** the n8n-hindsight node_lookup is a **divergent copy** (`.worktrees/n8n-knowledge-validator-preflight/hooks/lib/node_lookup.py`) that still has the **verb/demotion false-positive** — "Improve editor performance for large **workflows**" → `nodes-base.workflowTrigger` (wrong). The plugin's `node_lookup.py` already fixed this (verb-suffix stripping + `_DEMOTED_BARE_TOKENS` in fuzzy). Tagging 4,500 issues with the buggy copy would stamp false `node:*` tags.
-> - **Decision needed (the open "which source" question, now with teeth):** (a) regenerate `node_lookup_data.json` from `nodes.db` via `sync-nodes.py --refresh-lookup` AND use the **fixed** detection logic, vs (b) reconcile the two `node_lookup.py` copies into one shared module first. Either way, resolve the divergence before a production write. Left unbuilt deliberately — server-side prod write + unresolved sourcing is Dan's call.
+> **Status (2026-06-15):** node-detection false-positive FIXED + canonical-source documented (commits dc382c4, 701761e on `feat/version-aware-bug-surfacing`). Design resolved (below). Engagement floor = **5** (Dan, changeable). Dry-run with NO writes first; then **1–3 test retains only** — no bulk re-retain (don't burn DeepSeek before validation).
+
+**Design (resolved in conversation 2026-06-15):**
+- **Canonical detector = the plugin's `hooks/lib/node_lookup.py` + `node_lookup_data.json`.** It has the verb-stem + demotion fixes (incl. `workflows`→workflowTrigger). It carries a CANONICAL SOURCE header (do-not-fork rule).
+- **The same detector is the tag↔query contract.** Recall (`do_gotcha_recall`) queries `node:<community_tag(service)>`; ingest must WRITE the *identical* tag string or recall silently misses (a node written `node:openai` but queried `node:open-ai` returns nothing — no error, just degraded recall). So the tag-format mapping (`_node_to_community_tag`) must ALSO be single-canonical, not a second copy.
+- **Distribution constraint forces a vendored copy:** the plugin ships to users via the marketplace with no guaranteed `pip install`, so it MUST vendor `node_lookup.py` + data (can't depend on a package). Therefore n8n-hindsight keeps a **byte-identical vendored copy** of the *logic*, and a **hash-pin parity guard** (mirrored in both repos, same pattern as `test-hash-parity.sh`) fails CI on drift. The **data file is regenerated from `nodes.db`** (single source for the data) and is NOT hash-pinned (it changes on every catalog refresh).
+- A shared pip library was considered and rejected for the plugin side (breaks on user machines); it's optional polish for server-side consumers only.
 
 **Files:**
-- Modify: `n8n-hindsight/scripts/sync-github.py` (issue ingestion — add node-detection pass in `format_item`)
-- Reference: `n8n-knowledge/hooks/lib/node_lookup.py` (FIXED detection logic — has verb-stem + demotion fixes)
+- Modify: `hooks/lib/node_lookup.py` — add canonical `service_to_tag(service)` (the `_node_to_community_tag` body) + `community_tag(node_type)` (strip prefix + `Trigger`/`Tool` suffix → service → `service_to_tag`).
+- Modify: `hooks/lib/structured_recall.sh` — `_node_to_community_tag` calls `node_lookup.service_to_tag` (single source; delete the inline python mapping copy).
+- Vendor → n8n-hindsight: copy fixed `node_lookup.py`; regenerate `node_lookup_data.json` via `sync-nodes.py --refresh-lookup`; delete the stale `.worktrees/...preflight` copy.
+- Modify: `n8n-hindsight/scripts/sync-github.py:format_item()` — node-detect + floor + `node:X` tags.
+- Add: hash-pin parity guard (`tests/test-node-lookup-parity.sh`) in both repos.
 
-The generalizable relevance mechanism: run each issue's title + body through node-detection and attach `node:X` tags for every node mentioned. This tags the whole corpus, not a curated subset.
+- [ ] **Step 1: Extract the tag mapping to canonical Python (plugin, TDD).** Move `_node_to_community_tag`'s python body into `node_lookup.py` as `service_to_tag(service)`; add `community_tag(node_type)`. Unit-test: `community_tag('nodes-base.openAi')=='openai'`, `'@n8n/n8n-nodes-langchain.openAi'=='openai'`, `'nodes-base.httpRequest'=='http-request'`, `'nodes-base.merge'=='merge'`, `'nodes-base.scheduleTrigger'=='schedule-trigger'`.
 
-**Where node-detection runs (resolved):** issue-tagging happens **server-side in `sync-github.py`** (n8n-hindsight) at ingest time — the resulting `node:X` tags are baked into the bank, so **plugin users never need a local `nodes.db`** for this feature (Dan's distribution concern: most plugin users won't install n8n-mcp and won't have its bundled db — that's fine here, the detection is server-side). Source the detection dictionary from the **server-side node database the n8n-validator/validator-app deployment already has** (validator-app installs n8n-mcp in its Docker image; no committed `nodes.db` in the repo — it's built into the image). Do NOT assume the plugin's shipped `node_lookup.py` dict or n8n-mcp's local install on a user machine. n8n-hindsight already has an "ingestion-integrated path … using single source of truth with database" (the `--refresh-lookup` mechanism) — reuse that to build the detector from the validator's db.
+- [ ] **Step 2: Route the bash recall path through it.** `_node_to_community_tag` calls `node_lookup.service_to_tag`. Run resilience + structured tests (E4 must still see `node:` tags in gotcha requests). Commit.
 
-- [ ] **Step 1: Locate the issue-retain path in sync-github.py**
+- [ ] **Step 3: Vendor to n8n-hindsight.** Copy the fixed `node_lookup.py`; regenerate `node_lookup_data.json` via `sync-nodes.py --refresh-lookup`; remove the stale preflight copy so there's one server-side copy.
 
-```bash
-grep -n "tags\|retain\|node" /Users/danielbennett/codeNew/n8n-hindsight/scripts/sync-github.py | head -40
-```
+- [ ] **Step 4: Wire `sync-github.py:format_item()`.** Add named constant `RETAIN_ENGAGEMENT_FLOOR = 5`. Compute `eng = reactions_total + comments*4`; if `eng >= floor`, run `identify_nodes(title + " " + body)`, map each via `community_tag`, dedup, cap ~5, append `node:X` tags. Preserve all existing tags/metadata. `log` how many issues fall below the floor (no silent truncation).
 
-- [ ] **Step 2: Add a node-detection helper**
+- [ ] **Step 5: Hash-pin parity guard** in both repos: pin `sha256(node_lookup.py)`; mirror the identical literal in the n8n-hindsight suite. Data file intentionally NOT pinned. A red test = a copy drifted (fix the copy), never weaken the test.
 
-Per the design decision above, make node-detection available to the sync script (prefer building the lookup from `nodes.db` so there is no second copy of the dictionary). Detect on `title + " " + body`, dedup, cap at e.g. 5 node tags per issue to avoid tag spam on issues that name many nodes.
+- [ ] **Step 6: Dry-run (NO writes)** over known gotcha issues (Supabase #30630, Merge, Wait #29160/#31513, OpenAI #30311) PLUS a generic "large workflows" issue. Verify: correct `node:X` tags, NO false `node:workflowTrigger`, floor gating drops low-engagement issues. Record precision before any write.
 
-- [ ] **Step 3: Attach `node:X` tags to each issue's retain item**
-
-Append detected `node:X` tags to the existing tag list (`source:github-issues`, `type:github-issue`, state tags, etc.). Preserve all existing tags and metadata.
-
-- [ ] **Step 4: Dry-run on a small sample**
-
-Run sync-github.py in `--dry-run`/`--test N` mode (confirm flag exists) over ~20 issues that mention known gotcha nodes (Supabase #30630, Merge, Wait #29160/#31513, OpenAI #30311). Verify each gets the correct `node:X` tag(s) and no spurious ones.
-
-- [ ] **Step 5: Validate detection precision on the sample**
-
-Manually check the dry-run output: did "Supabase node fails credential testing" get `node:supabase`? Did a generic "workflow won't save" issue avoid false node tags? Record precision/recall on the 20-issue sample before scaling.
+- [ ] **Step 7: 1–3 live test retains** (Dan-authorized; idempotent via `document_id`) of real node-tagged issues. Verify recall finds them with `tags:["node:X"], tags_match:"all_strict"`, and confirm the `"all"` leak vs `"all_strict"` empirically. Then STOP — bulk re-retain (Task 3) stays gated on Dan.
 
 ---
 
@@ -251,14 +244,18 @@ Depends on: validator version exposure (works for validation-enabled users) + Ta
 
 ### Verification Checklist
 
-- [ ] Task 0: 5 curated test memories removed (recall returns 0 for `type:known-bug`)
-- [ ] `node:X` tagging in sync-github.py validated on a 20-issue sample (precision recorded)
-- [ ] Small-scale: node-filtered recall returns real issues, engagement ranks the gotcha on top, no curated input
+- [x] Task 0: 5 curated test memories removed (recall returns 0 for `type:known-bug`)
+- [x] `do_gotcha_recall` sends `node:X` filter with `all_strict` (no `type:known-bug` curation tag) — commit 5428a16
+- [x] Layer 2: gotcha query is task-aware (folds prompt keywords) — commit 5428a16
+- [x] Semantic recall skipped when Tier 1 ≥ 2 results — commit 54ce8fb
+- [x] Mental-model code fully removed (`do_mental_model_recall`, `section_selector.py` gone) — commit 54ce8fb
+- [x] Node-detection false-positive fixed (`workflows`→workflowTrigger) + canonical-source header — commits dc382c4, 701761e
+- [ ] Tag↔query contract single-canonical: `community_tag()` in `node_lookup.py`, bash `_node_to_community_tag` routes through it (no second copy)
+- [ ] n8n-hindsight vendors byte-identical `node_lookup.py`; stale preflight copy removed; hash-pin parity guard mirrored in both repos
+- [ ] `node:X` tagging in `sync-github.py` validated on a dry-run sample (precision recorded, floor=5 gating works, no false workflowTrigger)
+- [ ] Small-scale: node-filtered recall returns real issues, engagement ranks the gotcha on top, no curated input; `all` leak vs `all_strict` confirmed
 - [ ] Generalization: non-gotcha nodes also return their real issues
-- [ ] Scaled re-retain: no cross-bleed across ~10 nodes; engagement ranking holds
-- [ ] `do_gotcha_recall` sends `node:X` filter (no `type:known-bug` curation tag)
-- [ ] Semantic recall skipped when Tier 1 ≥ 2 results
-- [ ] Mental-model code fully removed (`do_mental_model_recall`, `section_selector.py` gone)
+- [ ] Scaled re-retain (Task 3, gated on Dan): no cross-bleed across ~10 nodes; engagement ranking holds
 - [ ] `fixed-in` coverage % logged (partial is expected)
 - [ ] `bash tests/run-all.sh` all pass
 - [ ] No API keys committed to n8n-knowledge repo
