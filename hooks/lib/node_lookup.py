@@ -212,8 +212,12 @@ def identify_nodes(prompt):
             node_ctx = r"\b" + re.escape(name) + r"\s+node\b"
             if not re.search(node_ctx, pl):
                 continue
-        # Single-word keys also match common verb forms (merges, filtered, etc.)
-        if " " not in name:
+        # Single-word keys >= 5 chars also match common verb forms
+        # ("merges"->merge, "filtered"->filter). The suffix alternation is
+        # GATED on length: short names (box, air, pop, git, code, wait) would
+        # over-match everyday English via the suffix — "boxing"->box,
+        # "aired"->air — stamping false node tags at ingest, so they stay exact.
+        if " " not in name and len(name) >= 5:
             pattern = r"\b" + re.escape(name) + r"(?:es|ed|ing|s|d)?\b"
         else:
             pattern = r"\b" + re.escape(name) + r"\b"
@@ -239,15 +243,17 @@ def identify_nodes(prompt):
             if w in _COMMON_WORDS or w in _DEMOTED_BARE_TOKENS:
                 continue
             # Strip common verb suffixes to match node names that are bare nouns
-            # (e.g. "merges" -> "merge", "splits" -> "split", "filtered" -> "filter").
+            # (e.g. "merges" -> "merge", "filtered" -> "filter"). A stripped stem
+            # must be >= 5 chars: short stems over-match English ("boxing" -ing ->
+            # "box", "running" -ing -> "runn") and stamp false node tags.
             stems = [w]
-            if w.endswith("es") and len(w) > 4:
+            if w.endswith("es") and len(w[:-2]) >= 5:
                 stems.append(w[:-2])
-            if w.endswith("s") and len(w) > 3:
+            if w.endswith("s") and len(w[:-1]) >= 5:
                 stems.append(w[:-1])
-            if w.endswith("ed") and len(w) > 4:
+            if w.endswith("ed") and len(w[:-2]) >= 5:
                 stems.append(w[:-2])
-            if w.endswith("ing") and len(w) > 5:
+            if w.endswith("ing") and len(w[:-3]) >= 5:
                 stems.append(w[:-3])
             for stem in stems:
                 # A stem that lands on a demoted/common bare token (e.g. the

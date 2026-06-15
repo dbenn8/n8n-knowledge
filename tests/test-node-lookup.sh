@@ -146,6 +146,14 @@ cases.append(('J_running_keeps_merge',
 cases.append(('J_toplevel_no_level_node',
     '@levelrmm/n8n-nodes-level.level' not in types('HTTP Request retries when response body has a top-level error field')))
 
+# Defect K: the Pass-1 verb/plural suffix is gated to names >= 5 chars, so short
+# node names don't over-match English ("boxing" must not hit a 3-char 'box'
+# node), while real verb forms of longer names still resolve.
+cases.append(('K_short_name_no_suffix_overmatch',
+    'nodes-base.box' not in types('boxing match results from the api')))
+cases.append(('K_long_name_suffix_still_works',
+    'nodes-base.merge' in types('the workflow merges two streams')))
+
 # Defect C: event-phrasing trigger word 'added' upgrades to the trigger node.
 cases.append(('C_added_yields_sheets_trigger',
     'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
