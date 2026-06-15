@@ -136,6 +136,16 @@ cases.append(('svc_to_tag_openai_map', _nl.service_to_tag('openAi') == 'openai')
 # not here — the canonical detector still supports the Function node for real
 # prompts. See n8n-hindsight test_github_node_tagging.py.
 
+# Defect J: rare community nodes with English-word names must not match a stray
+# word. 'running' must NOT stem to the Runn node; 'top-level' must NOT hit the
+# Level node. The real subject node in each title still resolves.
+cases.append(('J_running_no_runn_node',
+    'n8n-nodes-runn-dotsandarrows.runn' not in types('Merge Append not running if Merge choose branch')))
+cases.append(('J_running_keeps_merge',
+    'nodes-base.merge' in types('Merge Append not running if Merge choose branch')))
+cases.append(('J_toplevel_no_level_node',
+    '@levelrmm/n8n-nodes-level.level' not in types('HTTP Request retries when response body has a top-level error field')))
+
 # Defect C: event-phrasing trigger word 'added' upgrades to the trigger node.
 cases.append(('C_added_yields_sheets_trigger',
     'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))

@@ -79,6 +79,15 @@ _TRIGGER_WORDS = {
 _DEMOTED_BARE_TOKENS = {
     "n8n",
     "workflow",
+    # Rare community nodes whose single-word names collide with common English,
+    # so the bare word over-matches (e.g. ingest-tagging issue titles):
+    #   "runn"  = n8n-nodes-runn-dotsandarrows.runn — the -ing stemmer turns
+    #             "running" -> "runn" and hits it.
+    #   "level" = @levelrmm/n8n-nodes-level.level — "top-level" -> "level".
+    # Demote so they only resolve from an explicit multi-word reference, never a
+    # stray English word. (Broader community-node/English collisions: task #84.)
+    "runn",
+    "level",
 }
 
 
