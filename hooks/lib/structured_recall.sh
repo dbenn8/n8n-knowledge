@@ -121,5 +121,30 @@ do_gotcha_recall() {
     fi
   fi
 
-  echo "$result"
+  # Dedup near-identical facts of the SAME issue. The retain extracts a single
+  # bug 5-8x from its title/body/comments (all sharing document_id
+  # github-issue-NNNNN), which otherwise fills the downstream top-5 cap with
+  # fragments of ONE issue and buries other distinct bugs. Keep the
+  # highest-ranked unit per source issue so the top-5 = 5 DISTINCT issues.
+  # Falls back to the raw result on any parse error.
+  local deduped
+  deduped=$(echo "$result" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+seen, out = set(), []
+for x in d.get('results', []):
+    meta = x.get('metadata') or {}
+    key = x.get('document_id') or meta.get('url') or meta.get('number') or (x.get('text') or '')[:120]
+    if key in seen:
+        continue
+    seen.add(key)
+    out.append(x)
+d['results'] = out
+print(json.dumps(d))
+" 2>/dev/null)
+  if [ -n "$deduped" ]; then
+    echo "$deduped"
+  else
+    echo "$result"
+  fi
 }
