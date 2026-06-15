@@ -74,19 +74,21 @@ The 5 curated known-bug memories retained during the 2026-06-14 test would pollu
 - Modify: `n8n-hindsight/scripts/sync-github.py:format_item()` — node-detect + floor + `node:X` tags.
 - Add: hash-pin parity guard (`tests/test-node-lookup-parity.sh`) in both repos.
 
-- [ ] **Step 1: Extract the tag mapping to canonical Python (plugin, TDD).** Move `_node_to_community_tag`'s python body into `node_lookup.py` as `service_to_tag(service)`; add `community_tag(node_type)`. Unit-test: `community_tag('nodes-base.openAi')=='openai'`, `'@n8n/n8n-nodes-langchain.openAi'=='openai'`, `'nodes-base.httpRequest'=='http-request'`, `'nodes-base.merge'=='merge'`, `'nodes-base.scheduleTrigger'=='schedule-trigger'`.
+- [x] **Step 1: Extract the tag mapping to canonical Python (plugin, TDD).** `service_to_tag()`/`community_tag()` in `node_lookup.py`; `tag_*`/`svc_to_tag_*` tests. (commit 21b69fd)
 
-- [ ] **Step 2: Route the bash recall path through it.** `_node_to_community_tag` calls `node_lookup.service_to_tag`. Run resilience + structured tests (E4 must still see `node:` tags in gotcha requests). Commit.
+- [x] **Step 2: Route the bash recall path through it.** `_node_to_community_tag` now imports `node_lookup.service_to_tag` (inline MAP copy deleted). Recall E4 still sees `node:` tags; full suite green. (commit 21b69fd)
 
-- [ ] **Step 3: Vendor to n8n-hindsight.** Copy the fixed `node_lookup.py`; regenerate `node_lookup_data.json` via `sync-nodes.py --refresh-lookup`; remove the stale preflight copy so there's one server-side copy.
+- [x] **Step 3: Vendor to n8n-hindsight.** Byte-identical `node_lookup.py` + `node_lookup_data.json` in `n8n-hindsight/scripts/lib/` (branch `feat/github-node-tagging`). Note: master had NO prior node_lookup in `scripts/` — the stale `.worktrees/...preflight` copy lives on another branch and was left untouched. Data regeneratable from `nodes.db` via `sync-nodes.py --refresh-lookup`. (commit bb024fc)
 
-- [ ] **Step 4: Wire `sync-github.py:format_item()`.** Add named constant `RETAIN_ENGAGEMENT_FLOOR = 5`. Compute `eng = reactions_total + comments*4`; if `eng >= floor`, run `identify_nodes(title + " " + body)`, map each via `community_tag`, dedup, cap ~5, append `node:X` tags. Preserve all existing tags/metadata. `log` how many issues fall below the floor (no silent truncation).
+- [x] **Step 4: Wire `sync-github.py:format_item()`.** `RETAIN_ENGAGEMENT_FLOOR = 5`; `detect_node_tags()` gates on `reactions_total + comments*4 >= floor`, runs `identify_nodes`, maps via `community_tag`, dedup, cap 5. Best-effort (import failure → sync still runs). (commit bb024fc)
 
-- [ ] **Step 5: Hash-pin parity guard** in both repos: pin `sha256(node_lookup.py)`; mirror the identical literal in the n8n-hindsight suite. Data file intentionally NOT pinned. A red test = a copy drifted (fix the copy), never weaken the test.
+- [x] **Step 5: Hash-pin parity guard** in both repos — `sha256(node_lookup.py)` pinned (`bc8ea6c5…`) in `n8n-knowledge/tests/test-node-lookup-parity.sh` AND `n8n-hindsight/.../test_github_node_tagging.py::test_parity_node_lookup_hash`. (commits 4f52581, bb024fc)
 
-- [ ] **Step 6: Dry-run (NO writes)** over known gotcha issues (Supabase #30630, Merge, Wait #29160/#31513, OpenAI #30311) PLUS a generic "large workflows" issue. Verify: correct `node:X` tags, NO false `node:workflowTrigger`, floor gating drops low-engagement issues. Record precision before any write.
+- [x] **Step 6 (unit-level): tagging logic validated on synthetic issues** — supabase/merge/wait (high-eng) → tagged; below-floor → no tags; generic "large workflows" (eng 30) → NO `node:workflowTrigger`; floor boundary (5) inclusive. (n8n-hindsight pytest 6/6; full sync suite 109/109)
 
-- [ ] **Step 7: 1–3 live test retains** (Dan-authorized; idempotent via `document_id`) of real node-tagged issues. Verify recall finds them with `tags:["node:X"], tags_match:"all_strict"`, and confirm the `"all"` leak vs `"all_strict"` empirically. Then STOP — bulk re-retain (Task 3) stays gated on Dan.
+- [ ] **Step 6 (network): live dry-run** — ⛔ HAND-OFF: needs `GITHUB_TOKEN` (absent in build shell). Run `python3 scripts/sync-github.py --dry-run --test N` on real fetched issues; confirm tags on real text match the unit expectations before any write.
+
+- [ ] **Step 7: 1–3 live test retains** — ⛔ HAND-OFF: needs token + Dan's go (writes to prod bank). Idempotent via `document_id`. Verify recall finds them with `tags:["node:X"], tags_match:"all_strict"`, and confirm `"all"` leaks vs `"all_strict"`. Then STOP — bulk re-retain (Task 3) stays gated on Dan.
 
 ---
 
