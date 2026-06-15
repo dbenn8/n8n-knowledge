@@ -104,8 +104,7 @@ do_gotcha_recall() {
   # failures without adding meaningful latency to the happy path.
   if ! echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('results') else 1)" 2>/dev/null; then
     sleep 1
-    echo "[$(date +%H:%M:%S)] gotcha_recall retry for $service (initial empty/failed)" \
-      >> /tmp/n8n-knowledge-debug.log 2>/dev/null || true
+    nk_debug_log_write "[$(date +%H:%M:%S)] gotcha_recall retry for $service (initial empty/failed)"
     result=$(recall_post "$body")
 
     # Transition fallback: until the GitHub corpus is fully re-retained WITH

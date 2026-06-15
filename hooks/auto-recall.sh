@@ -136,19 +136,22 @@ json.dump({'results': combined, 'source_facts': merged_sf}, open(sys.argv[2], 'w
 " "$GOTCHA_MULTI_DIR" "$GOTCHA_TMPFILE" 2>/dev/null || true
   fi
 
-  # --- Tier 2 (conditional): semantic recall fires ONLY when Tier 1 is thin
-  # (< 2 results). When the node's known bugs + specs already answer the prompt,
-  # the broad semantic pass is mostly duplicate/low-signal community noise — so
-  # skip it and save the API call. ---
-  TIER1_COUNT=$(python3 -c "
+  # --- Tier 2 (conditional): semantic recall fires ONLY when the node has NO
+  # known gotchas (gotcha count == 0). Gate on GOTCHA count alone, NOT
+  # gotcha+struct: node specs are reference docs that exist for every valid node
+  # regardless of the prompt, so counting them made this branch dead code (Tier 2
+  # never fired once a node was detected). When the node has >=1 known
+  # high-engagement bug, that bug surface is the high-signal answer and the broad
+  # semantic pass is mostly duplicate/low-signal community noise — skip it and
+  # save the API call. When the node has zero known bugs, fall back to community
+  # semantic knowledge so how-to / "build me X" prompts still get coverage. ---
+  GOTCHA_COUNT=$(python3 -c "
 import json, sys
-def n(p):
-    try:
-        with open(p) as f: return len(json.load(f).get('results', []))
-    except Exception: return 0
-print(n(sys.argv[1]) + n(sys.argv[2]))
-" "$GOTCHA_TMPFILE" "$STRUCT_TMPFILE" 2>/dev/null || echo 0)
-  if [ "${TIER1_COUNT:-0}" -lt 2 ]; then
+try:
+    with open(sys.argv[1]) as f: print(len(json.load(f).get('results', [])))
+except Exception: print(0)
+" "$GOTCHA_TMPFILE" 2>/dev/null || echo 0)
+  if [ "${GOTCHA_COUNT:-0}" -lt 1 ]; then
     do_recall "$PROMPT" "low" > "$TMPFILE" 2>/dev/null || true
   fi
 
