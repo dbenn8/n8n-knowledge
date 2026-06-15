@@ -131,6 +131,10 @@ cases.append(('tag_strips_trigger', _nl.community_tag('nodes-base.scheduleTrigge
 cases.append(('tag_strips_tool', _nl.community_tag('nodes-base.gmailTool') == 'gmail'))
 cases.append(('svc_to_tag_camel', _nl.service_to_tag('httpRequest') == 'http-request'))
 cases.append(('svc_to_tag_openai_map', _nl.service_to_tag('openAi') == 'openai'))
+# NOTE: the JS-error noise "X is not a function" (which would tag the deprecated
+# Function node) is stripped on the INGEST side (sync-github.py:detect_node_tags),
+# not here — the canonical detector still supports the Function node for real
+# prompts. See n8n-hindsight test_github_node_tagging.py.
 
 # Defect C: event-phrasing trigger word 'added' upgrades to the trigger node.
 cases.append(('C_added_yields_sheets_trigger',
