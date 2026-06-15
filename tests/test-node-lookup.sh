@@ -54,7 +54,7 @@ echo "--- detection noise regression ---"
 TMPOUT2=$(mktemp)
 trap "rm -f $TMPOUT $TMPOUT2" EXIT
 
-python3 -c "
+python3 > "$TMPOUT2" <<PYEOF
 import sys
 sys.path.insert(0, '$LIB_DIR')
 from node_lookup import identify_nodes
@@ -231,9 +231,36 @@ cases.append(('H_dalle_finds_openai',
 cases.append(('H_gpt4_finds_openai',
     'nodes-base.openAi' in types('send the text to GPT-4 for analysis')))
 
+# Defect I: rare-node broad-keyword/fuzzy false positives must NOT tag, but the
+# real nodes (and explicit '<word> node' references) must still resolve.
+#   exact-key common words (demoted): if / search / inbox
+#   fuzzy-source common words: host->ghost, post->posta, attachment->attachmentAV
+cases.append(('I_bare_if_no_fp',
+    'nodes-base.if' not in types('Do not pull jobs if the worker is unhealthy')))
+cases.append(('I_if_node_still_resolves',
+    'nodes-base.if' in types('IF node returns the wrong branch')))
+cases.append(('I_host_no_ghost',
+    'nodes-base.ghost' not in types('Resolve VM proxy results on host side')))
+cases.append(('I_ghost_real_still_resolves',
+    'nodes-base.ghost' in types('Ghost CMS publish post fails')))
+cases.append(('I_search_no_searchapi',
+    len(types('Rewrite icon picker with search and emoji set')) == 0))
+cases.append(('I_search_node_still_resolves',
+    '@searchapi/n8n-nodes-searchapi.searchApi' in types('use the search node to query')))
+cases.append(('I_attachment_no_av',
+    '@attachmentav/n8n-nodes-attachmentav.attachmentAV' not in
+    types('Error adding attachment to Create Draft Outlook')))
+cases.append(('I_post_no_posta',
+    'n8n-nodes-posta.posta' not in types('post a message to the channel')))
+cases.append(('I_posta_real_still_resolves',
+    'n8n-nodes-posta.posta' in types('posta API connection error')))
+cases.append(('I_inbox_demoted_webhook_kept',
+    '@inboxapp/n8n-nodes-inboxapp.inboxApp' not in types('Webhook inbox not receiving')
+    and 'nodes-base.webhook' in types('Webhook inbox not receiving')))
+
 for name, ok in cases:
-    print(f'{name}|{\"PASS\" if ok else \"FAIL\"}')
-" > "$TMPOUT2"
+    print(f'{name}|{"PASS" if ok else "FAIL"}')
+PYEOF
 
 while IFS='|' read -r name result; do
   [ -z "$name" ] && continue

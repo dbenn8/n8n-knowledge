@@ -88,6 +88,16 @@ _DEMOTED_BARE_TOKENS = {
     # stray English word. (Broader community-node/English collisions: task #84.)
     "runn",
     "level",
+    # Bare common English words that are ALSO node keys, so the unqualified word
+    # over-matches at ingest (real issue/PR titles):
+    #   "if"     = nodes-base.if — "...pull jobs if the worker..." -> node:if
+    #   "search" = @searchapi/n8n-nodes-searchapi.searchApi — "icon picker with
+    #              search" -> node:search-api
+    #   "inbox"  = @inboxapp/n8n-nodes-inboxapp.inboxApp — "webhook inbox" -> node:inbox-app
+    # Demoted, not removed: "if node" / "search node" still resolve.
+    "if",
+    "search",
+    "inbox",
 }
 
 
@@ -119,6 +129,10 @@ _COMMON_WORDS = {
     "value", "input", "output", "error", "issue", "help", "want", "need",
     "what", "whats", "when", "where", "which", "that", "this", "with",
     "from", "into", "handle", "recommended", "best", "way",
+    # Common English words that fuzzy-match rare community node names and stamp
+    # false tags at ingest (Pass-2 SequenceMatcher): "host"->ghost, "post"->posta,
+    # "attachment"->attachmentAV. Excluded from both passes (they are not nodes).
+    "host", "post", "attachment",
 }
 
 
@@ -267,8 +281,12 @@ def identify_nodes(prompt):
                     break
             if hits:
                 break
-            # Original fuzzy similarity check (for typos, min 4 chars)
-            if len(w) >= 4:
+            # Original fuzzy similarity check (for typos). Min length 5: 4-char
+            # words fuzzy-match rare nodes too readily (1-char edit gives ratio
+            # ~0.89), e.g. "host"->ghost, "post"->posta. Real node-name typos are
+            # >=5 chars; short stems stay exact. (Consistent with the suffix /
+            # stemmer length-gating above; broader noise = task #84.)
+            if len(w) >= 5:
                 best, best_score = None, 0.0
                 for name in lookup:
                     if len(name) < 4 or " " in name:
