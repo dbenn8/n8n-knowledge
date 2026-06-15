@@ -86,9 +86,9 @@ The 5 curated known-bug memories retained during the 2026-06-14 test would pollu
 
 - [x] **Step 6 (unit-level): tagging logic validated on synthetic issues** — supabase/merge/wait (high-eng) → tagged; below-floor → no tags; generic "large workflows" (eng 30) → NO `node:workflowTrigger`; floor boundary (5) inclusive. (n8n-hindsight pytest 6/6; full sync suite 109/109)
 
-- [ ] **Step 6 (network): live dry-run** — ⛔ HAND-OFF: needs `GITHUB_TOKEN` (absent in build shell). Run `python3 scripts/sync-github.py --dry-run --test N` on real fetched issues; confirm tags on real text match the unit expectations before any write.
+- [x] **Step 6 (network): live dry-run DONE** (via `GITHUB_TOKEN=$(gh auth token)`). Surfaced two refinements, both fixed: **(a) detect on TITLE only** — bodies paste whole workflows/traces and over-tagged (a Wait bug's body crowded out `node:wait` under the cap); **(b) strip the JS-error phrase `"is not a function"`** ingest-side (it smuggled the deprecated Function node into `node:function` across error-titled issues; Dan's call — strip the phrase, not the word, so the canonical detector is untouched and real "Function node" titles still detect). Final dry-run: #30630→supabase, #31513→wait, #30311→openai, all clean. (commits 98c0620, d435df0)
 
-- [ ] **Step 7: 1–3 live test retains** — ⛔ HAND-OFF: needs token + Dan's go (writes to prod bank). Idempotent via `document_id`. Verify recall finds them with `tags:["node:X"], tags_match:"all_strict"`, and confirm `"all"` leaks vs `"all_strict"`. Then STOP — bulk re-retain (Task 3) stays gated on Dan.
+- [x] **Step 7: 3 live test retains DONE** (supabase #30630, openai #30311, wait #31513 → bank, idempotent via `document_id`, op 97b88bf7). Recall with `tags:["node:X"], tags_match:"all_strict"` finds each by node (supabase 2, openai 2, wait 4; correct top hit each). Tag↔query contract proven end-to-end. **Bulk re-retain (Task 3) stays gated on Dan.**
 
 ---
 
