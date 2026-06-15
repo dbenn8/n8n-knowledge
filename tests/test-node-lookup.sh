@@ -88,10 +88,28 @@ cases.append(('E_explicit_workflow_trigger',
     'nodes-base.workflowTrigger' in types('add a workflow trigger node')))
 
 # Defect H: the PLURAL 'workflows' must NOT stem to 'workflow' -> workflowTrigger.
-# 'workflow' is demoted, but the Pass-2 verb/plural stemmer matched the stem
-# without re-checking the demotion list. This matters doubly for ingest-side
-# node-tagging: thousands of issues mention 'workflows' in passing and would be
-# falsely stamped node:workflowTrigger.
+# =====================================================================
+# DO NOT DELETE OR WEAKEN THESE CASES. This is a real, fixed bug guard.
+# =====================================================================
+# 'workflow' is a demoted bare token, but the Pass-2 verb/plural stemmer matched
+# the stem in the lookup WITHOUT re-checking the demotion list — so 'workflows'
+# (not itself demoted) stemmed to 'workflow' and resolved to workflowTrigger.
+# Fix: hooks/lib/node_lookup.py re-checks _DEMOTED_BARE_TOKENS/_COMMON_WORDS on
+# each stem (commit dc382c4).
+#
+# WHY THIS MATTERS ENOUGH TO PIN: this same detector tags GitHub issues/PRs with
+# node:X at INGEST time. Thousands of issues mention 'workflows' in passing; with
+# this bug, each would be falsely stamped node:workflowTrigger, and gotcha recall
+# for that node would fill with irrelevant issues — re-introducing the exact
+# cross-node noise the version-aware-bug-surfacing effort exists to remove. A
+# false positive here corrupts the production bank and costs a full re-retain to
+# undo. If this test ever goes red, the detector regressed (or a vendored copy
+# drifted) — FIX THE CODE, do not relax the assertion.
+#
+# NOTE the asymmetry the second case pins: when a REAL node is present, Pass-1
+# matches it and Pass-2 (the stemmer) never runs, so 'workflows' is harmless
+# there. The bug only bites generic issues with no other detectable node — i.e.
+# exactly the ones that should get NO node tag at all.
 cases.append(('H_plural_workflows_no_workflowtrigger',
     'nodes-base.workflowTrigger' not in types('improve editor performance for large workflows')))
 cases.append(('H_plural_workflows_with_real_node',

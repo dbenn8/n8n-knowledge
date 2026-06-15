@@ -3,7 +3,37 @@
 Maps service/node display names mentioned in user prompts to their canonical
 n8n node type identifiers (e.g. "nodes-base.slack"). The lookup dictionary
 is loaded from node_lookup_data.json, which is generated from the n8n node
-catalog.
+catalog (nodes.db) — that DB is the single source of truth for the *data*.
+
+============================================================================
+CANONICAL SOURCE — DO NOT FORK.
+============================================================================
+This file is THE canonical node-detection logic. It runs in TWO roles that
+form one contract:
+  • RECALL side (plugin, this repo): detects nodes in the USER'S PROMPT
+    (auto-recall.sh, detect-n8n.sh) — picks which node tags to QUERY.
+  • INGEST side (n8n-hindsight sync-github.py, planned): detects nodes in an
+    ISSUE/PR — picks which node tags to WRITE.
+If these two drift, recall SILENTLY MISSES what ingest tagged (a node written
+as `node:openai` but queried as `node:open-ai` returns nothing). The bug is
+invisible — no error, just degraded recall — so it must be prevented mechanically,
+not by discipline.
+
+Why a copy must exist at all: the plugin ships to end users via the Claude Code
+marketplace and runs on whatever Python they have (no guaranteed `pip install`),
+so it MUST vendor this file + node_lookup_data.json rather than depend on a
+package. n8n-hindsight (server-side) therefore keeps a byte-identical VENDORED
+COPY of this logic.
+
+RULE: change this file here first, then re-vendor the identical file to
+n8n-hindsight. Never edit the n8n-hindsight copy directly. When wiring the
+INGEST side (Task 1), add a hash-pin parity guard for this file mirrored in
+both repos — same pattern as tests/test-hash-parity.sh — so any drift between
+the two copies fails CI loudly. Never "fix" a failing parity or regression test
+by weakening it: a red test means a copy drifted, not that the test is wrong.
+The data file (node_lookup_data.json) is intentionally NOT hash-pinned — it is
+regenerated from nodes.db (the single source for the data) and changes whenever
+the node catalog updates.
 """
 import json
 import os
