@@ -218,13 +218,13 @@ Mental models are curated bug catalogs — the same teaching-to-the-test problem
 #### New flow:
 ```
 Tier 1 (always, parallel):  node-filtered gotcha recall (per node) + structured node-spec recall + nodes.db inject
-Tier 2 (conditional):       semantic recall — only if Tier 1 returned < 2 results
+Tier 2 (conditional):       semantic recall — only if the detected node has 0 known gotchas (GOTCHA_COUNT < 1)
 ```
 
-- [ ] **Step 1: Update tests** — remove mental-model isolation vars; add E4 asserting Tier 2 semantic recall is skipped when Tier 1 has ≥ 2 results.
+- [ ] **Step 1: Update tests** — remove mental-model isolation vars; add E5 asserting Tier 2 semantic recall is skipped when the node has ≥ 1 gotcha, and E6 asserting it fires when the node has 0 gotchas.
 - [ ] **Step 2: Run tests to verify they fail.**
 - [ ] **Step 3: Remove mental-model code** from `structured_recall.sh` (`_ensure_manifest`, `_manifest_hash`, `do_mental_model_recall`, `MENTAL_MODEL_*` vars).
-- [ ] **Step 4: Restructure `auto-recall.sh`** to Tier 1 (node-filtered gotcha + structured, parallel) → conditional Tier 2 (semantic when `TIER1_COUNT < 2`). Remove the `MM_CONTENT` phase, `MM_DIR`, and the mental-model header injection block.
+- [ ] **Step 4: Restructure `auto-recall.sh`** to Tier 1 (node-filtered gotcha + structured, parallel) → conditional Tier 2 (semantic when `GOTCHA_COUNT < 1`, i.e. the node has zero known gotchas). Remove the `MM_CONTENT` phase, `MM_DIR`, and the mental-model header injection block.
 - [ ] **Step 5: Remove `section_selector.py`** (`git rm`) and its references.
 - [ ] **Step 6: Run full suite.**
 - [ ] **Step 7: Commit.**

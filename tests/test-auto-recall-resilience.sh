@@ -149,16 +149,40 @@ else
   fail "E4b: gotcha query not task-aware (no prompt keyword in gotcha request bodies)"
 fi
 
-# --- E5: Tier 2 semantic recall is SKIPPED when Tier 1 has >= 2 results ---
-# In ok mode Tier 1 (gotcha + structured) returns results, so the conditional
+# --- E5: Tier 2 semantic recall is SKIPPED when the node has >= 1 gotcha ---
+# The gate fires semantic recall ONLY when GOTCHA_COUNT == 0. In ok mode every
+# gotcha request returns results, so GOTCHA_COUNT >= 1 and the conditional
 # semantic pass must NOT fire. A semantic request carries neither the gotcha
 # marker ("max_tokens": 2000) nor the structured marker ("tags_match"), but does
 # carry a "query". Reuses the body log captured by the E4 run above.
 SEM_REQS=$(grep '"query"' "$E4_BODY" 2>/dev/null | grep -cvE '"max_tokens": 2000|"tags_match"' || true)
 if [ "${SEM_REQS:-0}" -eq 0 ]; then
-  pass "E5: Tier 2 semantic recall skipped when Tier 1 sufficient (0 semantic requests)"
+  pass "E5: Tier 2 semantic recall skipped when node has gotchas (0 semantic requests)"
 else
-  fail "E5: Tier 2 semantic recall fired despite sufficient Tier 1 ($SEM_REQS semantic requests)"
+  fail "E5: Tier 2 semantic recall fired despite node gotchas present ($SEM_REQS semantic requests)"
+fi
+
+# --- E6: Tier 2 semantic recall FIRES when the node has 0 gotchas ---
+# The complement of E5 and the branch added by the gotcha-only gate (commit
+# 7f96346). In gotcha-empty mode every gotcha request returns {"results": []},
+# so GOTCHA_COUNT == 0 and the conditional semantic pass MUST fire — restoring
+# how-to / community coverage for nodes with no known high-engagement bugs.
+# Guard against a false pass: also confirm gotcha requests WERE issued (node was
+# detected), so a zero-gotcha-request run can't masquerade as "semantic fired".
+E6_STDOUT="$(mktemp)"
+E6_BODY="$(mktemp)"
+TMP_FILES+=("$E6_STDOUT" "$E6_BODY")
+start_stub gotcha-empty "$E6_STDOUT" "$E6_BODY"
+printf '{"prompt": "%s", "cwd": "%s"}' "$PROMPT" "$REPO" |
+  RECALL_URL="http://127.0.0.1:$STUB_PORT/recall" bash "$HOOK" > "$E6_STDOUT" 2>&1 || true
+kill "$STUB_PID" 2>/dev/null || true
+STUB_PID=""
+E6_GOTCHA=$(grep -c '"max_tokens": 2000' "$E6_BODY" 2>/dev/null || echo 0)
+E6_SEM=$(grep '"query"' "$E6_BODY" 2>/dev/null | grep -cvE '"max_tokens": 2000|"tags_match"' || true)
+if [ "${E6_GOTCHA:-0}" -ge 1 ] && [ "${E6_SEM:-0}" -ge 1 ]; then
+  pass "E6: Tier 2 semantic recall fires when node has 0 gotchas (gotcha=$E6_GOTCHA sem=$E6_SEM)"
+else
+  fail "E6: expected gotcha>=1 and semantic>=1 with 0-gotcha node (gotcha=$E6_GOTCHA sem=$E6_SEM)"
 fi
 
 echo ""

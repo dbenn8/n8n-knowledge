@@ -2,7 +2,7 @@
 """Stub Hindsight recall HTTP server for resilience tests.
 
 CLI:
-    argv[1] = mode      one of: ok | sem-fail | slow | gotcha-fail-once
+    argv[1] = mode      one of: ok | sem-fail | slow | gotcha-fail-once | gotcha-empty
     argv[2] = port      TCP port to bind on 127.0.0.1. Pass 0 for an ephemeral
                         OS-assigned port; the actual bound port is then printed
                         to stdout as a single "PORT=<n>" line (flushed) BEFORE
@@ -26,6 +26,10 @@ Modes:
     sem-fail        -> HTTP 500 for semantic requests only; 200 for the rest
     slow            -> sleep 30 before answering (exercises curl --max-time)
     gotcha-fail-once -> HTTP 500 for first gotcha request, then 200
+    gotcha-empty    -> 200 with empty {"results": []} for gotcha requests (node
+                       detected but zero known gotchas); 200 JSON for the rest.
+                       Exercises the Tier-2 gate firing semantic recall when a
+                       node has no gotchas.
 """
 import json
 import sys
@@ -129,6 +133,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'{"error": "gotcha recall failed (transient)"}')
                 return
+
+        if MODE == "gotcha-empty" and kind == "gotcha":
+            empty = json.dumps({"results": []}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(empty)))
+            self.end_headers()
+            self.wfile.write(empty)
+            return
 
         if MODE == "sem-fail" and kind == "semantic":
             self.send_response(500)
