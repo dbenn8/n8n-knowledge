@@ -2,7 +2,7 @@
 """Stub Hindsight recall HTTP server for resilience tests.
 
 CLI:
-    argv[1] = mode      one of: ok | sem-fail | slow
+    argv[1] = mode      one of: ok | sem-fail | slow | gotcha-fail-once | gotcha-empty
     argv[2] = port      TCP port to bind on 127.0.0.1. Pass 0 for an ephemeral
                         OS-assigned port; the actual bound port is then printed
                         to stdout as a single "PORT=<n>" line (flushed) BEFORE
@@ -22,9 +22,14 @@ Request classification (by raw body substring):
   first, and semantic is the fall-through.
 
 Modes:
-    ok        -> 200 JSON for every request
-    sem-fail  -> HTTP 500 for semantic requests only; 200 for the rest
-    slow      -> sleep 30 before answering (exercises curl --max-time)
+    ok              -> 200 JSON for every request
+    sem-fail        -> HTTP 500 for semantic requests only; 200 for the rest
+    slow            -> sleep 30 before answering (exercises curl --max-time)
+    gotcha-fail-once -> HTTP 500 for first gotcha request, then 200
+    gotcha-empty    -> 200 with empty {"results": []} for gotcha requests (node
+                       detected but zero known gotchas); 200 JSON for the rest.
+                       Exercises the Tier-2 gate firing semantic recall when a
+                       node has no gotchas.
 """
 import json
 import sys
@@ -34,6 +39,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 MODE = sys.argv[1] if len(sys.argv) > 1 else "ok"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8733
 BODY_LOG = sys.argv[3] if len(sys.argv) > 3 else "/tmp/stub-recall-body.log"
+GOTCHA_REQUEST_COUNT = 0
 
 
 def classify(body):
@@ -117,6 +123,25 @@ class Handler(BaseHTTPRequestHandler):
 
         if MODE == "slow":
             time.sleep(30)
+
+        if MODE == "gotcha-fail-once" and kind == "gotcha":
+            global GOTCHA_REQUEST_COUNT
+            GOTCHA_REQUEST_COUNT += 1
+            if GOTCHA_REQUEST_COUNT == 1:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error": "gotcha recall failed (transient)"}')
+                return
+
+        if MODE == "gotcha-empty" and kind == "gotcha":
+            empty = json.dumps({"results": []}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(empty)))
+            self.end_headers()
+            self.wfile.write(empty)
+            return
 
         if MODE == "sem-fail" and kind == "semantic":
             self.send_response(500)

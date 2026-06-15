@@ -70,7 +70,9 @@ STRUCT_TMPFILE=$(mktemp)
 GOTCHA_TMPFILE=$(mktemp)
 GOTCHA_MULTI_DIR=$(mktemp -d)
 trap 'rm -f "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE"; rm -rf "$GOTCHA_MULTI_DIR"' EXIT
-do_recall "$PROMPT" "low" > "$TMPFILE"
+# Semantic recall is now Tier 2 (conditional): fired below only when Tier 1
+# (node-filtered gotcha + structured specs) is thin, or unconditionally when no
+# node is detected (semantic is then the only source). It no longer runs eagerly.
 
 # Check for node names in the prompt and do structured + gotcha recall if found
 # Also capture all detected nodes for DB schema injection
@@ -89,26 +91,24 @@ NODE_TYPE=$(echo "$NODE_DETECT" | sed -n '1p')
 NODE_TYPES=$(echo "$NODE_DETECT" | sed -n '2p')
 
 if [ -n "$NODE_TYPE" ]; then
-  # Run node-spec and gotcha recalls in parallel.
-  # Gotcha recall covers ALL detected node types (capped), not just the first:
-  # querying only the first detection missed the Merge row-loss gotcha when
-  # ZeroBounce happened to be detected first (eval prompt 122). Each curl has a
-  # hard max-time (recall_common.sh) and they run concurrently, so the cap
-  # bounds context size, not wall-clock time.
   GOTCHA_NODE_CAP="${CLAUDE_PLUGIN_OPTION_GOTCHANODECAP:-3}"
+
+  # --- Tier 1 (always): node-filtered gotcha for EVERY detected node (capped) +
+  # structured node specs, in parallel. This is the high-signal tier. Mental
+  # models were removed — node-tagged + engagement-ranked gotcha recall replaces
+  # them (see plan 2026-06-13-version-aware-bug-tagging). ---
   do_structured_recall "$NODE_TYPE" > "$STRUCT_TMPFILE" 2>/dev/null &
   _gn=0
   for _nt in $NODE_TYPES; do
     [ "$_gn" -ge "$GOTCHA_NODE_CAP" ] && break
-    do_gotcha_recall "$_nt" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
+    do_gotcha_recall "$_nt" "$PROMPT" > "$GOTCHA_MULTI_DIR/$_gn.json" 2>/dev/null &
     _gn=$((_gn + 1))
   done
   wait
 
-  # Combine per-node gotcha results: round-robin across nodes (so the first
-  # detected node cannot crowd out the others), dedup, cap 5 total — same cap
-  # the single-node version had.
-  python3 -c "
+  # Combine per-node gotcha results (round-robin interleave, cap 5).
+  if [ "$_gn" -gt 0 ]; then
+    python3 -c "
 import glob, json, sys
 combined, seen = [], set()
 buckets = []
@@ -118,9 +118,6 @@ for path in sorted(glob.glob(sys.argv[1] + '/*.json')):
         with open(path) as f:
             doc = json.load(f)
         buckets.append(doc.get('results', []))
-        # Accumulate the per-node source_facts dict so observation provenance
-        # (URLs/engagement) survives the gotcha combine — the renderer resolves
-        # source_fact_ids against this merged dict.
         merged_sf.update(doc.get('source_facts') or {})
     except Exception:
         pass
@@ -137,11 +134,28 @@ while len(combined) < 5 and any(len(b) > i for b in buckets):
     i += 1
 json.dump({'results': combined, 'source_facts': merged_sf}, open(sys.argv[2], 'w'))
 " "$GOTCHA_MULTI_DIR" "$GOTCHA_TMPFILE" 2>/dev/null || true
+  fi
 
-  # Merge: gotchas FIRST (highest priority), then semantic, then capped node specs.
-  # Every stream is loaded independently — a timed-out semantic recall must NOT
-  # discard the gotcha/spec results (the old all-or-nothing try block did
-  # exactly that whenever the semantic call failed under endpoint load).
+  # --- Tier 2 (conditional): semantic recall fires ONLY when the node has NO
+  # known gotchas (gotcha count == 0). Gate on GOTCHA count alone, NOT
+  # gotcha+struct: node specs are reference docs that exist for every valid node
+  # regardless of the prompt, so counting them made this branch dead code (Tier 2
+  # never fired once a node was detected). When the node has >=1 known
+  # high-engagement bug, that bug surface is the high-signal answer and the broad
+  # semantic pass is mostly duplicate/low-signal community noise — skip it and
+  # save the API call. When the node has zero known bugs, fall back to community
+  # semantic knowledge so how-to / "build me X" prompts still get coverage. ---
+  GOTCHA_COUNT=$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f: print(len(json.load(f).get('results', [])))
+except Exception: print(0)
+" "$GOTCHA_TMPFILE" 2>/dev/null || echo 0)
+  if [ "${GOTCHA_COUNT:-0}" -lt 1 ]; then
+    do_recall "$PROMPT" "low" > "$TMPFILE" 2>/dev/null || true
+  fi
+
+  # Merge recall streams (gotcha first, then semantic, then capped node specs).
   python3 -c "
 import json, sys
 
@@ -158,12 +172,7 @@ gotcha_doc = load_results(sys.argv[3])
 struct_results = struct_doc.get('results', [])[:5]
 gotcha_results = gotcha_doc.get('results', [])[:5]
 sem_results = sem.get('results', [])
-# Order: gotchas (bugs/issues) → semantic (docs/community) → node specs (reference)
 sem['results'] = gotcha_results + sem_results + struct_results
-# Merge source_facts across all three streams so observations arriving via the
-# gotcha/structured channels keep their provenance (URLs/engagement). Semantic
-# wins key collisions (ids are UUIDs — collisions are theoretical). A dead
-# stream contributes an empty dict, so the per-stream tolerance is preserved.
 sem['source_facts'] = {
     **(struct_doc.get('source_facts') or {}),
     **(gotcha_doc.get('source_facts') or {}),
@@ -172,6 +181,9 @@ sem['source_facts'] = {
 with open(sys.argv[1], 'w') as f:
     json.dump(sem, f)
 " "$TMPFILE" "$STRUCT_TMPFILE" "$GOTCHA_TMPFILE" 2>/dev/null || true
+else
+  # No node detected — semantic recall is the only available source, so run it.
+  do_recall "$PROMPT" "low" > "$TMPFILE" 2>/dev/null || true
 fi
 
 # Inject compact node schema from nodes.db (valid operation enums per resource)

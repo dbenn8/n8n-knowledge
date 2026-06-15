@@ -87,6 +87,73 @@ cases.append(('B_build_prompt_no_workflowtrigger', 'nodes-base.workflowTrigger' 
 cases.append(('E_explicit_workflow_trigger',
     'nodes-base.workflowTrigger' in types('add a workflow trigger node')))
 
+# Defect H: the PLURAL 'workflows' must NOT stem to 'workflow' -> workflowTrigger.
+# =====================================================================
+# DO NOT DELETE OR WEAKEN THESE CASES. This is a real, fixed bug guard.
+# =====================================================================
+# 'workflow' is a demoted bare token, but the Pass-2 verb/plural stemmer matched
+# the stem in the lookup WITHOUT re-checking the demotion list — so 'workflows'
+# (not itself demoted) stemmed to 'workflow' and resolved to workflowTrigger.
+# Fix: hooks/lib/node_lookup.py re-checks _DEMOTED_BARE_TOKENS/_COMMON_WORDS on
+# each stem (commit dc382c4).
+#
+# WHY THIS MATTERS ENOUGH TO PIN: this same detector tags GitHub issues/PRs with
+# node:X at INGEST time. Thousands of issues mention 'workflows' in passing; with
+# this bug, each would be falsely stamped node:workflowTrigger, and gotcha recall
+# for that node would fill with irrelevant issues — re-introducing the exact
+# cross-node noise the version-aware-bug-surfacing effort exists to remove. A
+# false positive here corrupts the production bank and costs a full re-retain to
+# undo. If this test ever goes red, the detector regressed (or a vendored copy
+# drifted) — FIX THE CODE, do not relax the assertion.
+#
+# NOTE the asymmetry the second case pins: when a REAL node is present, Pass-1
+# matches it and Pass-2 (the stemmer) never runs, so 'workflows' is harmless
+# there. The bug only bites generic issues with no other detectable node — i.e.
+# exactly the ones that should get NO node tag at all.
+cases.append(('H_plural_workflows_no_workflowtrigger',
+    'nodes-base.workflowTrigger' not in types('improve editor performance for large workflows')))
+cases.append(('H_plural_workflows_with_real_node',
+    'nodes-base.merge' in types('the merge node loses rows across large workflows')
+    and 'nodes-base.workflowTrigger' not in types('the merge node loses rows across large workflows')))
+
+# --- Tag-format contract: community_tag()/service_to_tag() are the SINGLE
+# canonical node_type -> community tag mapping shared by recall (bash
+# _node_to_community_tag routes through it) AND the ingest side. If these drift
+# from what do_gotcha_recall queries, recall silently misses ingest's tags.
+import node_lookup as _nl
+cases.append(('tag_openai_base', _nl.community_tag('nodes-base.openAi') == 'openai'))
+cases.append(('tag_openai_langchain', _nl.community_tag('@n8n/n8n-nodes-langchain.openAi') == 'openai'))
+cases.append(('tag_http_request', _nl.community_tag('nodes-base.httpRequest') == 'http-request'))
+cases.append(('tag_merge', _nl.community_tag('nodes-base.merge') == 'merge'))
+cases.append(('tag_supabase', _nl.community_tag('nodes-base.supabase') == 'supabase'))
+# do_gotcha_recall strips Trigger/Tool BEFORE the tag map; community_tag mirrors that.
+cases.append(('tag_strips_trigger', _nl.community_tag('nodes-base.scheduleTrigger') == 'schedule'))
+cases.append(('tag_strips_tool', _nl.community_tag('nodes-base.gmailTool') == 'gmail'))
+cases.append(('svc_to_tag_camel', _nl.service_to_tag('httpRequest') == 'http-request'))
+cases.append(('svc_to_tag_openai_map', _nl.service_to_tag('openAi') == 'openai'))
+# NOTE: the JS-error noise "X is not a function" (which would tag the deprecated
+# Function node) is stripped on the INGEST side (sync-github.py:detect_node_tags),
+# not here — the canonical detector still supports the Function node for real
+# prompts. See n8n-hindsight test_github_node_tagging.py.
+
+# Defect J: rare community nodes with English-word names must not match a stray
+# word. 'running' must NOT stem to the Runn node; 'top-level' must NOT hit the
+# Level node. The real subject node in each title still resolves.
+cases.append(('J_running_no_runn_node',
+    'n8n-nodes-runn-dotsandarrows.runn' not in types('Merge Append not running if Merge choose branch')))
+cases.append(('J_running_keeps_merge',
+    'nodes-base.merge' in types('Merge Append not running if Merge choose branch')))
+cases.append(('J_toplevel_no_level_node',
+    '@levelrmm/n8n-nodes-level.level' not in types('HTTP Request retries when response body has a top-level error field')))
+
+# Defect K: the Pass-1 verb/plural suffix is gated to names >= 5 chars, so short
+# node names don't over-match English ("boxing" must not hit a 3-char 'box'
+# node), while real verb forms of longer names still resolve.
+cases.append(('K_short_name_no_suffix_overmatch',
+    'nodes-base.box' not in types('boxing match results from the api')))
+cases.append(('K_long_name_suffix_still_works',
+    'nodes-base.merge' in types('the workflow merges two streams')))
+
 # Defect C: event-phrasing trigger word 'added' upgrades to the trigger node.
 cases.append(('C_added_yields_sheets_trigger',
     'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
@@ -135,6 +202,34 @@ cases.append(('F_clause_slack_action',
 # Keep-green guard: the event phrase ALONE still upgrades sheets locally.
 cases.append(('F_sheets_alone_trigger',
     'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
+
+# Defect G: verb forms of node names must resolve to the node.
+# "merges" -> merge, "splits" -> split. The fuzzy fallback must also
+# respect _DEMOTED_BARE_TOKENS so "workflow" doesn't sneak through.
+cases.append(('G_merges_finds_merge',
+    'nodes-base.merge' in types('merges data from two different API sources')))
+cases.append(('G_merges_no_workflow',
+    'nodes-base.workflowTrigger' not in types('merges data from two different API sources')))
+cases.append(('G_splits_no_false_positive',
+    len(types('splits items into batches')) == 0))
+
+# Defect G: verb forms must be detected ALONGSIDE other nodes (not just solo).
+# This is the actual eval failure: 'webhook ... merges' detected only webhook.
+t = types('receive webhook data then merges them together by product ID')
+cases.append(('G_verb_with_other_nodes_merge',
+    'nodes-base.merge' in t))
+cases.append(('G_verb_with_other_nodes_webhook',
+    'nodes-base.webhook' in t))
+
+# Defect H: model-name aliases resolve to OpenAI node.
+cases.append(('H_gpt4o_finds_openai',
+    'nodes-base.openAi' in types('check blog posts with GPT-4o before publishing')))
+cases.append(('H_chatgpt_finds_openai',
+    'nodes-base.openAi' in types('use ChatGPT to summarize the article')))
+cases.append(('H_dalle_finds_openai',
+    'nodes-base.openAi' in types('generate an image with DALL-E 3')))
+cases.append(('H_gpt4_finds_openai',
+    'nodes-base.openAi' in types('send the text to GPT-4 for analysis')))
 
 for name, ok in cases:
     print(f'{name}|{\"PASS\" if ok else \"FAIL\"}')

@@ -515,6 +515,17 @@ def render_result(n, r, level, obs, sf_pairs, cfg, source_facts=None):
         tag = github_state_tag(r.get("metadata"), r.get("tags"))
         if tag:
             text = f"{tag} {text}"
+        is_github = any(
+            t.startswith("source:github") or t in ("type:github-issue", "type:github-pr")
+            for t in (r.get("tags") or [])
+        )
+        gh_meta = r.get("metadata") or {}
+        is_open_or_wontfix = (
+            gh_meta.get("state") == "open"
+            or gh_meta.get("state_reason") == "not_planned"
+        )
+        if is_github and is_open_or_wontfix and gh_meta.get("state_reason") != "completed":
+            text = f"KNOWN BUG: {text}"
         open_tag = f'<result n="{n}" kind="post" confidence="{level}" source="{source}">'
         interior = "\n".join([text, suffix])
 

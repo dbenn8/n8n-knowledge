@@ -29,7 +29,7 @@ STUB_PID=""
 TMP_FILES=()
 cleanup() {
   [ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
-  for f in "${TMP_FILES[@]}"; do rm -f "$f" 2>/dev/null || true; done
+  for f in "${TMP_FILES[@]}"; do rm -rf "$f" 2>/dev/null || true; done
 }
 trap cleanup EXIT
 
@@ -58,6 +58,10 @@ start_stub() {
 }
 
 echo "=== auto-recall resilience (E2E) tests ==="
+
+# Mental models were removed (replaced by node-tagged + engagement-ranked gotcha
+# recall). Every detected node now goes through gotcha recall unconditionally —
+# no cache/API isolation needed anymore.
 
 # --- E1: gotcha results survive a dead semantic recall (sem-fail mode) ---
 E1_STDOUT="$(mktemp)"
@@ -112,6 +116,73 @@ if grep -Fq 'sources="2"' "$E3_OUT" || grep -Fq 'example.com/sf/' "$E3_OUT"; the
   pass "E3: gotcha observation carries provenance end-to-end (sources=\"2\" / resolved sf link)"
 else
   fail "E3: gotcha observation lost provenance — no sources=\"2\" or sf link in hook output"
+fi
+
+# --- E4: gotcha recall is node-tagged (all_strict) + task-aware (Layer 2) ---
+# Task 5: do_gotcha_recall filters by ["node:X"] with tags_match=all_strict
+# ("all"/"any" include UNtagged memories by design and would re-admit the
+# cross-node Facebook/Salesforce noise), and folds the user's task keywords into
+# the query so dense nodes surface bugs relevant to THIS task. PROMPT mentions
+# "google sheet" — task keywords that are NOT node/service names, proving the
+# query is task-aware. Mental-model isolation (set above) routes every node
+# through gotcha recall so the request bodies are observable.
+E4_STDOUT="$(mktemp)"
+E4_BODY="$(mktemp)"
+TMP_FILES+=("$E4_STDOUT" "$E4_BODY")
+start_stub ok "$E4_STDOUT" "$E4_BODY"
+printf '{"prompt": "%s", "cwd": "%s"}' "$PROMPT" "$REPO" |
+  RECALL_URL="http://127.0.0.1:$STUB_PORT/recall" bash "$HOOK" > "$E4_STDOUT" 2>&1 || true
+kill "$STUB_PID" 2>/dev/null || true
+STUB_PID=""
+# Gotcha requests carry max_tokens 2000; count how many are strict + node-tagged.
+GOTCHA_N=$(grep -c '"max_tokens": 2000' "$E4_BODY" 2>/dev/null || echo 0)
+GOTCHA_STRICT=$(grep '"max_tokens": 2000' "$E4_BODY" 2>/dev/null | grep -c 'all_strict' || echo 0)
+GOTCHA_NODE=$(grep '"max_tokens": 2000' "$E4_BODY" 2>/dev/null | grep -c '"node:' || echo 0)
+if [ "$GOTCHA_N" -ge 2 ] && [ "$GOTCHA_STRICT" -eq "$GOTCHA_N" ] && [ "$GOTCHA_NODE" -eq "$GOTCHA_N" ]; then
+  pass "E4: every gotcha request is node-tagged + all_strict ($GOTCHA_N gotcha / $GOTCHA_STRICT strict / $GOTCHA_NODE node)"
+else
+  fail "E4: gotcha not node-tagged/all_strict (gotcha=$GOTCHA_N strict=$GOTCHA_STRICT node=$GOTCHA_NODE)"
+fi
+if grep '"max_tokens": 2000' "$E4_BODY" 2>/dev/null | grep -q 'sheet\|google'; then
+  pass "E4b: gotcha query is task-aware (prompt keyword present in a gotcha request)"
+else
+  fail "E4b: gotcha query not task-aware (no prompt keyword in gotcha request bodies)"
+fi
+
+# --- E5: Tier 2 semantic recall is SKIPPED when the node has >= 1 gotcha ---
+# The gate fires semantic recall ONLY when GOTCHA_COUNT == 0. In ok mode every
+# gotcha request returns results, so GOTCHA_COUNT >= 1 and the conditional
+# semantic pass must NOT fire. A semantic request carries neither the gotcha
+# marker ("max_tokens": 2000) nor the structured marker ("tags_match"), but does
+# carry a "query". Reuses the body log captured by the E4 run above.
+SEM_REQS=$(grep '"query"' "$E4_BODY" 2>/dev/null | grep -cvE '"max_tokens": 2000|"tags_match"' || true)
+if [ "${SEM_REQS:-0}" -eq 0 ]; then
+  pass "E5: Tier 2 semantic recall skipped when node has gotchas (0 semantic requests)"
+else
+  fail "E5: Tier 2 semantic recall fired despite node gotchas present ($SEM_REQS semantic requests)"
+fi
+
+# --- E6: Tier 2 semantic recall FIRES when the node has 0 gotchas ---
+# The complement of E5 and the branch added by the gotcha-only gate (commit
+# 7f96346). In gotcha-empty mode every gotcha request returns {"results": []},
+# so GOTCHA_COUNT == 0 and the conditional semantic pass MUST fire — restoring
+# how-to / community coverage for nodes with no known high-engagement bugs.
+# Guard against a false pass: also confirm gotcha requests WERE issued (node was
+# detected), so a zero-gotcha-request run can't masquerade as "semantic fired".
+E6_STDOUT="$(mktemp)"
+E6_BODY="$(mktemp)"
+TMP_FILES+=("$E6_STDOUT" "$E6_BODY")
+start_stub gotcha-empty "$E6_STDOUT" "$E6_BODY"
+printf '{"prompt": "%s", "cwd": "%s"}' "$PROMPT" "$REPO" |
+  RECALL_URL="http://127.0.0.1:$STUB_PORT/recall" bash "$HOOK" > "$E6_STDOUT" 2>&1 || true
+kill "$STUB_PID" 2>/dev/null || true
+STUB_PID=""
+E6_GOTCHA=$(grep -c '"max_tokens": 2000' "$E6_BODY" 2>/dev/null || echo 0)
+E6_SEM=$(grep '"query"' "$E6_BODY" 2>/dev/null | grep -cvE '"max_tokens": 2000|"tags_match"' || true)
+if [ "${E6_GOTCHA:-0}" -ge 1 ] && [ "${E6_SEM:-0}" -ge 1 ]; then
+  pass "E6: Tier 2 semantic recall fires when node has 0 gotchas (gotcha=$E6_GOTCHA sem=$E6_SEM)"
+else
+  fail "E6: expected gotcha>=1 and semantic>=1 with 0-gotcha node (gotcha=$E6_GOTCHA sem=$E6_SEM)"
 fi
 
 echo ""

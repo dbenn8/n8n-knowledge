@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.9 (2026-06-15)
+
+### Version-aware bug surfacing (node-tagged gotcha recall)
+- GitHub issues/PRs are now tagged `node:<community_tag>` at ingest by a single canonical detector (`hooks/lib/node_lookup.py`), vendored byte-identically into the ingest repo and guarded by a cross-repo hash-parity test — the tag the ingest side writes is exactly the tag recall queries.
+- Tagging is gated by **engagement** (`reactions + comments*4`, floor 5), not a hand-curated bug list: high-signal issues earn their node tag; low-engagement noise does not.
+- `do_gotcha_recall` queries `node:<tag>` with `tags_match: all_strict` (excludes untagged cross-node noise) and folds the user's task keywords into the query, so dense nodes surface bugs relevant to *this* task. Results dedup by source issue.
+- Two-layer progressive disclosure in `auto-recall.sh`: Tier 1 (node-filtered gotcha + node specs, always) → Tier 2 (broad semantic, conditional — fires only when the detected node has **zero** known gotchas, restoring how-to coverage without flooding well-covered nodes with community noise).
+- **Mental models removed** — node-tagged + engagement-ranked gotcha recall replaces the curated bug catalogs (and their staleness/maintenance burden).
+
 ### Surgical-edit repair mode (now the default)
 - New `workflowEditStyle` option (`rewrite` | `surgical`). In surgical mode, INVALID validator feedback instructs the model to patch only the failing nodes via a scripted JSON edit and a `!!DRAFT!!` draft marker, instead of regenerating the whole file — cutting output tokens on large-workflow repair rounds by ~99% per fix.
 - The validation hook skips files whose first line is `!!DRAFT!!` (work-in-progress drafts): no validation, no budget charge, in all modes.

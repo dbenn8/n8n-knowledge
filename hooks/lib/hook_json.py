@@ -46,7 +46,7 @@ import sys
 # Single source of truth for the inline-context character budget. Kept here so
 # every hook caps additionalContext at the same value (was a magic 10000 repeated
 # inline in auto-recall.sh).
-MAX_CTX = 10000
+MAX_CTX = int(os.environ.get("NK_MAX_CTX", "10000"))
 
 # Exact suffix appended when truncation occurs — must stay byte-identical to the
 # pre-refactor inline blocks so downstream output is unchanged.

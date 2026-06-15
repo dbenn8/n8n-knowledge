@@ -3,12 +3,42 @@
 Maps service/node display names mentioned in user prompts to their canonical
 n8n node type identifiers (e.g. "nodes-base.slack"). The lookup dictionary
 is loaded from node_lookup_data.json, which is generated from the n8n node
-catalog.
+catalog (nodes.db) — that DB is the single source of truth for the *data*.
+
+============================================================================
+CANONICAL SOURCE — DO NOT FORK.
+============================================================================
+This file is THE canonical node-detection logic. It runs in TWO roles that
+form one contract:
+  • RECALL side (plugin, this repo): detects nodes in the USER'S PROMPT
+    (auto-recall.sh, detect-n8n.sh) — picks which node tags to QUERY.
+  • INGEST side (n8n-hindsight sync-github.py, planned): detects nodes in an
+    ISSUE/PR — picks which node tags to WRITE.
+If these two drift, recall SILENTLY MISSES what ingest tagged (a node written
+as `node:openai` but queried as `node:open-ai` returns nothing). The bug is
+invisible — no error, just degraded recall — so it must be prevented mechanically,
+not by discipline.
+
+Why a copy must exist at all: the plugin ships to end users via the Claude Code
+marketplace and runs on whatever Python they have (no guaranteed `pip install`),
+so it MUST vendor this file + node_lookup_data.json rather than depend on a
+package. n8n-hindsight (server-side) therefore keeps a byte-identical VENDORED
+COPY of this logic.
+
+RULE: change this file here first, then re-vendor the identical file to
+n8n-hindsight. Never edit the n8n-hindsight copy directly. When wiring the
+INGEST side (Task 1), add a hash-pin parity guard for this file mirrored in
+both repos — same pattern as tests/test-hash-parity.sh — so any drift between
+the two copies fails CI loudly. Never "fix" a failing parity or regression test
+by weakening it: a red test means a copy drifted, not that the test is wrong.
+The data file (node_lookup_data.json) is intentionally NOT hash-pinned — it is
+regenerated from nodes.db (the single source for the data) and changes whenever
+the node catalog updates.
 """
 import json
 import os
 import re
-from difflib import get_close_matches
+from difflib import get_close_matches, SequenceMatcher
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _DATA = None
@@ -49,6 +79,15 @@ _TRIGGER_WORDS = {
 _DEMOTED_BARE_TOKENS = {
     "n8n",
     "workflow",
+    # Rare community nodes whose single-word names collide with common English,
+    # so the bare word over-matches (e.g. ingest-tagging issue titles):
+    #   "runn"  = n8n-nodes-runn-dotsandarrows.runn — the -ing stemmer turns
+    #             "running" -> "runn" and hits it.
+    #   "level" = @levelrmm/n8n-nodes-level.level — "top-level" -> "level".
+    # Demote so they only resolve from an explicit multi-word reference, never a
+    # stray English word. (Broader community-node/English collisions: task #84.)
+    "runn",
+    "level",
 }
 
 
@@ -95,6 +134,11 @@ def _fuzzy_lookup(word, lookup, cutoff=0.85):
     if matches:
         return matches[0]
     return None
+
+
+def _similarity(a, b):
+    """Return a 0-1 similarity ratio between two strings (SequenceMatcher)."""
+    return SequenceMatcher(None, a, b).ratio()
 
 
 # Proximity window for trigger-intent scoping (in word tokens).
@@ -168,7 +212,15 @@ def identify_nodes(prompt):
             node_ctx = r"\b" + re.escape(name) + r"\s+node\b"
             if not re.search(node_ctx, pl):
                 continue
-        pattern = r"\b" + re.escape(name) + r"\b"
+        # Single-word keys >= 5 chars also match common verb forms
+        # ("merges"->merge, "filtered"->filter). The suffix alternation is
+        # GATED on length: short names (box, air, pop, git, code, wait) would
+        # over-match everyday English via the suffix — "boxing"->box,
+        # "aired"->air — stamping false node tags at ingest, so they stay exact.
+        if " " not in name and len(name) >= 5:
+            pattern = r"\b" + re.escape(name) + r"(?:es|ed|ing|s|d)?\b"
+        else:
+            pattern = r"\b" + re.escape(name) + r"\b"
         m = re.search(pattern, pl)
         if m:
             nt = lookup[name]
@@ -184,28 +236,91 @@ def identify_nodes(prompt):
             hits.append((name, nt))
             pl = re.sub(pattern, "", pl, count=1)
 
-    # Pass 2: fuzzy fallback for unmatched words (catches typos)
+    # Pass 2: fuzzy fallback for unmatched words (catches typos + verb forms)
     if not hits:
         words = re.findall(r"\b[a-z]{3,}\b", pl)
-        for word in words:
-            if word in _TRIGGER_WORDS:
+        for w in words:
+            if w in _COMMON_WORDS or w in _DEMOTED_BARE_TOKENS:
                 continue
-            matched_key = _fuzzy_lookup(word, lookup)
-            if matched_key:
-                nt = lookup[matched_key]
-                suffix = nt.split(".")[-1].lower()
-                base = re.sub(r"trigger$", "", suffix)
-                # Locate the fuzzy-matched word in the prompt to scope trigger
-                # intent to its span (fall back to no-trigger if not found).
-                wm = re.search(r"\b" + re.escape(word) + r"\b", pl)
-                local_trigger = (
-                    _trigger_word_near(pl, wm.start(), wm.end()) if wm else False
-                )
-                if not local_trigger and base in action and "trigger" in suffix:
-                    nt = action[base]
-                elif local_trigger and "trigger" not in suffix and suffix in trigger:
-                    nt = trigger[suffix]
-                hits.append((matched_key, nt))
+            # Strip common verb suffixes to match node names that are bare nouns
+            # (e.g. "merges" -> "merge", "filtered" -> "filter"). A stripped stem
+            # must be >= 5 chars: short stems over-match English ("boxing" -ing ->
+            # "box", "running" -ing -> "runn") and stamp false node tags.
+            stems = [w]
+            if w.endswith("es") and len(w[:-2]) >= 5:
+                stems.append(w[:-2])
+            if w.endswith("s") and len(w[:-1]) >= 5:
+                stems.append(w[:-1])
+            if w.endswith("ed") and len(w[:-2]) >= 5:
+                stems.append(w[:-2])
+            if w.endswith("ing") and len(w[:-3]) >= 5:
+                stems.append(w[:-3])
+            for stem in stems:
+                # A stem that lands on a demoted/common bare token (e.g. the
+                # plural "workflows" -> "workflow" -> workflowTrigger) must NOT
+                # match — the original-word guard above only saw "workflows".
+                if stem in _COMMON_WORDS or stem in _DEMOTED_BARE_TOKENS:
+                    continue
+                if stem in lookup:
+                    nt = lookup[stem]
+                    hits.append((stem, nt))
+                    break
+            if hits:
                 break
+            # Original fuzzy similarity check (for typos, min 4 chars)
+            if len(w) >= 4:
+                best, best_score = None, 0.0
+                for name in lookup:
+                    if len(name) < 4 or " " in name:
+                        continue
+                    if name in _COMMON_WORDS or name in _DEMOTED_BARE_TOKENS:
+                        continue
+                    ratio = _similarity(w, name)
+                    if ratio > best_score:
+                        best, best_score = name, ratio
+                if best_score >= 0.85:
+                    hits.append((best, lookup[best]))
+                    break
 
     return hits
+
+
+# --- Node-type -> community tag mapping (THE tag<->query contract) ----------
+# This is the single canonical implementation. The bash recall path
+# (structured_recall.sh:_node_to_community_tag) routes through service_to_tag,
+# and the ingest side (n8n-hindsight sync-github.py) uses community_tag, so both
+# produce the IDENTICAL `node:<tag>` string. If they ever diverge, recall
+# silently misses what ingest tagged. Do not fork this mapping.
+
+# Community tags that diverge from the mechanical camelCase->kebab-case form.
+_COMMUNITY_TAG_MAP = {
+    "open-ai": "openai",
+    "lm-chat-open-ai": "openai",
+    "lm-open-ai": "openai",
+    "open-ai-assistant": "openai",
+    "http-request": "http-request",
+    "split-in-batches": "split-in-batches",
+    "execute-workflow": "execute-workflow",
+    "schedule-trigger": "schedule-trigger",
+    "form-trigger": "form-trigger",
+}
+
+
+def service_to_tag(service):
+    """Map a bare service name (already stripped of node prefix + Trigger/Tool
+    suffix) to its community tag: camelCase -> kebab-case, then known overrides.
+    Mirrors structured_recall.sh:_node_to_community_tag exactly."""
+    s = (service or "").strip()
+    tag = re.sub(r"([a-z])([A-Z])", r"\1-\2", s).lower()
+    return _COMMUNITY_TAG_MAP.get(tag, tag)
+
+
+def community_tag(node_type):
+    """Map a full node type (e.g. 'nodes-base.openAi',
+    '@n8n/n8n-nodes-langchain.openAi') to its community tag, mirroring how
+    do_gotcha_recall derives it: take the segment after the last '.', strip a
+    trailing 'Trigger' or 'Tool', then service_to_tag()."""
+    service = (node_type or "").rsplit(".", 1)[-1]
+    service = re.sub(r"Trigger$", "", service)
+    service = re.sub(r"Tool$", "", service)
+    return service_to_tag(service)

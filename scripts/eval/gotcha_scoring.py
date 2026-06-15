@@ -91,7 +91,12 @@ def _load_workflow(wf_path: str | None) -> dict | None:
     if not wf_path:
         return None
     try:
-        return json.load(open(wf_path))
+        data = json.load(open(wf_path))
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict):
+            return None
+        return data
     except Exception:
         return None
 
@@ -296,9 +301,26 @@ def _check_param(workflow: dict, rule: dict) -> tuple[bool, str]:
                 elif mode:
                     all_ok = False
                     reasons.append(f"webhook responseMode='{mode}' (may fire before processing)")
-                # If responseMode not set, it defaults to immediate — that's the bug
                 elif not mode and "trigger" not in node.get("type", "").lower():
-                    pass  # Non-trigger webhooks may not have this param
+                    pass
+
+        elif check_name == "merge_uses_keyed_mode":
+            for node in matching_nodes:
+                params = node.get("parameters", {})
+                mode = params.get("mode", "")
+                combo = params.get("combinationMode", "")
+                has_key = bool(
+                    params.get("mergeByFields")
+                    or params.get("fieldsToMatch")
+                    or combo == "mergeByFields"
+                )
+                if has_key:
+                    reasons.append(f"merge uses keyed mode ({combo or mode})")
+                elif mode == "combine" and not has_key:
+                    all_ok = False
+                    reasons.append(f"merge uses positional combine (timing hazard)")
+                else:
+                    reasons.append(f"merge mode='{mode}' (non-positional)")
 
     return all_ok, "; ".join(reasons) if reasons else "param checks passed"
 
@@ -360,7 +382,13 @@ def score_gotchas(results_dir: str, ground_truth_path: str) -> dict[str, dict]:
     Returns {cond -> {"addressed": int, "scored": int, "ran": int,
                        "deterministic": int, "heuristic": int, "details": [...]}}
     """
-    rules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gotcha_rules.jsonl")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    gt_stem = os.path.splitext(os.path.basename(ground_truth_path))[0]
+    standalone_rules = os.path.join(script_dir, f"{gt_stem}_rules_standalone.jsonl")
+    if os.path.exists(standalone_rules):
+        rules_path = standalone_rules
+    else:
+        rules_path = os.path.join(script_dir, "gotcha_rules.jsonl")
     rules = load_rules(rules_path)
     patterns = load_gotcha_patterns(ground_truth_path)
 

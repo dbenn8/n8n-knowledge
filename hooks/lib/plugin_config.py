@@ -17,7 +17,7 @@ DEFAULTS = {
     "high_threshold": 70,
     "medium_threshold": 50,
     "docs_base": 80,
-    "github_base": 49,
+    "github_base": 55,
     "community_base": 40,
     "solved_bonus": 25,
     "clear_signal_bonus": 25,

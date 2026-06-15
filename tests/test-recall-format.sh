@@ -87,15 +87,16 @@ assert_contains "solved community has solved label" "solved" "$context"
 # Built-with-n8n with high engagement (22 likes, 8 votes, 1200 views) should NOT be LOW
 assert_not_contains "high-engagement built-with is not LOW" "LOW" "$(confidence_of "$context" "automated invoice processing")"
 
-# Low-engagement unsolved community gets filtered out (max_low_results=1, github LOW scores higher)
-assert_not_contains "low-engagement community filtered by max_low_results" "connect n8n to their local database" "$context"
+# Low-engagement unsolved community now appears — bare GitHub moved from LOW→MEDIUM (github_base=55),
+# freeing the single max_low_results slot for this community result.
+assert_contains "low-engagement community survives (github vacated LOW slot)" "connect n8n to their local database" "$context"
 
 # Source URLs should be present in suffixes
 assert_contains "has docs URL" "docs.n8n.io" "$context"
 assert_contains "has github URL" "github.com" "$context"
 
-# GitHub no-signal issue (hhh: base 49, no bonuses) should be LOW
-assert_eq "github no signals is LOW" "LOW" "$(confidence_of "$context" "zero engagement")"
+# GitHub no-signal issue (hhh: base 55, no bonuses) should be MEDIUM
+assert_eq "github no signals is MEDIUM" "MEDIUM" "$(confidence_of "$context" "zero engagement")"
 
 # Stale github (fff: closed+completed BUT has Stale label) — the bucket hint must NOT
 # contradict the canonical [CLOSED·completed] tag by claiming "stale — no resolution".

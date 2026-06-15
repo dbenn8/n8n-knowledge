@@ -767,6 +767,9 @@ Choose a descriptive filename based on what the workflow does (e.g. slack-post-m
         [ -n "${EVAL_PLUGIN_WORKFLOW_EDIT_STYLE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE=${EVAL_PLUGIN_WORKFLOW_EDIT_STYLE}")
         [ -n "${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE:-}" ] && plugin_env+=("CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE=${EVAL_PLUGIN_WORKFLOW_VALIDATION_BUDGET_MODE}")
       fi
+      [ -n "${MENTAL_MODEL_URL:-}" ] && plugin_env+=("MENTAL_MODEL_URL=${MENTAL_MODEL_URL}")
+      [ -n "${N8N_HINDSIGHT_API_KEY:-}" ] && plugin_env+=("N8N_HINDSIGHT_API_KEY=${N8N_HINDSIGHT_API_KEY}")
+      [ -n "${NK_MAX_CTX:-}" ] && plugin_env+=("NK_MAX_CTX=${NK_MAX_CTX}")
       plugin_cmd=(
         "$CLAUDE_BIN" -p "$effective_prompt"
         "${common_args[@]}"

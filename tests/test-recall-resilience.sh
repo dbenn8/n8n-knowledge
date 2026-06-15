@@ -129,6 +129,60 @@ else
   fail "C5: format_results.py exited nonzero on garbage payload (rc=${G_RC:-?})"
 fi
 
+# --- C6: gotcha recall retries on transient failure ---
+echo ""
+echo "--- C6: gotcha recall retries on empty/failed response ---"
+
+STUB_PORT_C5=""
+STUB_PID_C5=""
+BODY_LOG_C5="$RUNTIME_DIR/c5-body.log"
+
+launch_stub_c5() {
+  local out_file
+  out_file="$(mktemp)"
+  python3 "$STUB" gotcha-fail-once 0 "$BODY_LOG_C5" > "$out_file" 2>/dev/null &
+  STUB_PID_C5=$!
+  local tries=0
+  while [ "$tries" -lt 40 ]; do
+    if grep -q '^PORT=' "$out_file" 2>/dev/null; then
+      STUB_PORT_C5=$(grep '^PORT=' "$out_file" | head -1 | cut -d= -f2)
+      rm -f "$out_file"
+      return 0
+    fi
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  rm -f "$out_file"
+  return 1
+}
+
+launch_stub_c5
+
+c5_result=$(
+  N8N_KNOWLEDGE_RUNTIME_DIR="$RUNTIME_DIR" \
+  RECALL_URL="http://127.0.0.1:$STUB_PORT_C5" \
+  bash -c '
+    source "'"$REPO"'/hooks/lib/structured_recall.sh"
+    do_gotcha_recall "nodes-base.openAi"
+  '
+)
+
+kill "$STUB_PID_C5" 2>/dev/null || true
+wait "$STUB_PID_C5" 2>/dev/null || true
+
+if echo "$c5_result" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('results') else 1)" 2>/dev/null; then
+  pass "gotcha recall returns results after retry on transient failure"
+else
+  fail "gotcha recall returns results after retry on transient failure"
+fi
+
+c5_count=$(wc -l < "$BODY_LOG_C5" 2>/dev/null | tr -d ' ')
+if [ "$c5_count" = "2" ]; then
+  pass "gotcha recall made exactly 2 requests (initial + retry)"
+else
+  fail "gotcha recall made exactly 2 requests (expected 2, got ${c5_count:-0})"
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
