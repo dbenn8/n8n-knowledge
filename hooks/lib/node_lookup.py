@@ -268,3 +268,44 @@ def identify_nodes(prompt):
                     break
 
     return hits
+
+
+# --- Node-type -> community tag mapping (THE tag<->query contract) ----------
+# This is the single canonical implementation. The bash recall path
+# (structured_recall.sh:_node_to_community_tag) routes through service_to_tag,
+# and the ingest side (n8n-hindsight sync-github.py) uses community_tag, so both
+# produce the IDENTICAL `node:<tag>` string. If they ever diverge, recall
+# silently misses what ingest tagged. Do not fork this mapping.
+
+# Community tags that diverge from the mechanical camelCase->kebab-case form.
+_COMMUNITY_TAG_MAP = {
+    "open-ai": "openai",
+    "lm-chat-open-ai": "openai",
+    "lm-open-ai": "openai",
+    "open-ai-assistant": "openai",
+    "http-request": "http-request",
+    "split-in-batches": "split-in-batches",
+    "execute-workflow": "execute-workflow",
+    "schedule-trigger": "schedule-trigger",
+    "form-trigger": "form-trigger",
+}
+
+
+def service_to_tag(service):
+    """Map a bare service name (already stripped of node prefix + Trigger/Tool
+    suffix) to its community tag: camelCase -> kebab-case, then known overrides.
+    Mirrors structured_recall.sh:_node_to_community_tag exactly."""
+    s = (service or "").strip()
+    tag = re.sub(r"([a-z])([A-Z])", r"\1-\2", s).lower()
+    return _COMMUNITY_TAG_MAP.get(tag, tag)
+
+
+def community_tag(node_type):
+    """Map a full node type (e.g. 'nodes-base.openAi',
+    '@n8n/n8n-nodes-langchain.openAi') to its community tag, mirroring how
+    do_gotcha_recall derives it: take the segment after the last '.', strip a
+    trailing 'Trigger' or 'Tool', then service_to_tag()."""
+    service = (node_type or "").rsplit(".", 1)[-1]
+    service = re.sub(r"Trigger$", "", service)
+    service = re.sub(r"Tool$", "", service)
+    return service_to_tag(service)

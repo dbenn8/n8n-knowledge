@@ -24,26 +24,19 @@ do_structured_recall() {
 }
 
 _node_to_community_tag() {
+  # Single source of truth for the service -> community tag mapping lives in
+  # node_lookup.py:service_to_tag (the SAME function the ingest side uses), so
+  # the tags recall QUERIES are byte-identical to the tags ingest WRITES. Do not
+  # reintroduce an inline copy of the mapping here.
   local service="$1"
-  local tag
-  tag=$(echo "$service" | python3 -c "
-import re, sys
-s = sys.stdin.read().strip()
-# camelCase to kebab-case
-tag = re.sub(r'([a-z])([A-Z])', r'\1-\2', s).lower()
-# Known mappings where the community tag diverges from the node name
-MAP = {
-    'open-ai': 'openai', 'lm-chat-open-ai': 'openai',
-    'lm-open-ai': 'openai', 'open-ai-assistant': 'openai',
-    'http-request': 'http-request',
-    'split-in-batches': 'split-in-batches',
-    'execute-workflow': 'execute-workflow',
-    'schedule-trigger': 'schedule-trigger',
-    'form-trigger': 'form-trigger',
-}
-print(MAP.get(tag, tag))
-")
-  echo "$tag"
+  local lib_dir
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  echo "$service" | python3 -c "
+import sys
+sys.path.insert(0, sys.argv[1])
+from node_lookup import service_to_tag
+print(service_to_tag(sys.stdin.read().strip()))
+" "$lib_dir"
 }
 
 # Extract task keywords from the user's prompt for the Layer-2 (within-node)

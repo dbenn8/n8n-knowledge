@@ -116,6 +116,22 @@ cases.append(('H_plural_workflows_with_real_node',
     'nodes-base.merge' in types('the merge node loses rows across large workflows')
     and 'nodes-base.workflowTrigger' not in types('the merge node loses rows across large workflows')))
 
+# --- Tag-format contract: community_tag()/service_to_tag() are the SINGLE
+# canonical node_type -> community tag mapping shared by recall (bash
+# _node_to_community_tag routes through it) AND the ingest side. If these drift
+# from what do_gotcha_recall queries, recall silently misses ingest's tags.
+import node_lookup as _nl
+cases.append(('tag_openai_base', _nl.community_tag('nodes-base.openAi') == 'openai'))
+cases.append(('tag_openai_langchain', _nl.community_tag('@n8n/n8n-nodes-langchain.openAi') == 'openai'))
+cases.append(('tag_http_request', _nl.community_tag('nodes-base.httpRequest') == 'http-request'))
+cases.append(('tag_merge', _nl.community_tag('nodes-base.merge') == 'merge'))
+cases.append(('tag_supabase', _nl.community_tag('nodes-base.supabase') == 'supabase'))
+# do_gotcha_recall strips Trigger/Tool BEFORE the tag map; community_tag mirrors that.
+cases.append(('tag_strips_trigger', _nl.community_tag('nodes-base.scheduleTrigger') == 'schedule'))
+cases.append(('tag_strips_tool', _nl.community_tag('nodes-base.gmailTool') == 'gmail'))
+cases.append(('svc_to_tag_camel', _nl.service_to_tag('httpRequest') == 'http-request'))
+cases.append(('svc_to_tag_openai_map', _nl.service_to_tag('openAi') == 'openai'))
+
 # Defect C: event-phrasing trigger word 'added' upgrades to the trigger node.
 cases.append(('C_added_yields_sheets_trigger',
     'nodes-base.googleSheetsTrigger' in types('when a google sheets row is added')))
