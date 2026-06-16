@@ -102,7 +102,8 @@ def _is_first_party(node_type):
     third-party community package, which needs a distinctive (non-dictionary) name or
     an explicit '<name> node' reference to match — see _r2_demote."""
     scope = node_type.split(".")[0].lower()
-    return scope in ("nodes-base", "n8n-nodes-base") or "langchain" in scope
+    return scope in ("nodes-base", "n8n-nodes-base",
+                     "nodes-langchain", "n8n-nodes-langchain")
 
 
 def _r2_demote(name, node_type):

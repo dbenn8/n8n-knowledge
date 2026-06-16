@@ -285,6 +285,16 @@ cases.append(('J_distinctive_3p_kept',  # non-dict third-party name still resolv
     'n8n-nodes-mcp.mcp' in types('MCP server trigger stops working')))
 cases.append(('J_langchain_agent_kept',  # first-party langchain dict-word name kept
     'nodes-langchain.agent' in types('AI Agent does not store tool usage in memory')))
+# _DICT_SUPPLEMENT: tech words the Unix dict omits, so R2 demotes these third-party
+# dict-gap nodes (loops/async/utils) but explicit '<name> node' still resolves.
+cases.append(('J_loops_demoted',
+    'n8n-nodes-loops.loops' not in types('Handle HTTP raw body validation loops')))
+cases.append(('J_loops_node_resolves',
+    'n8n-nodes-loops.loops' in types('set up the loops node')))
+cases.append(('J_async_demoted',
+    '@asyncai/n8n-nodes-asyncai.asyncAi' not in types('async service connection error')))
+cases.append(('J_utils_demoted',
+    '@bitovi/n8n-nodes-utils.utils' not in types('fix utils.ts incorrect mapping')))
 
 for name, ok in cases:
     print(f'{name}|{"PASS" if ok else "FAIL"}')
