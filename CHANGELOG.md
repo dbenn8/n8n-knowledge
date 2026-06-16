@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.3.10 (2026-06-16)
+
+### Node-detection precision (general FP rules) + corpus re-tag
+- General false-positive rules in the canonical node detector (`hooks/lib/node_lookup.py`), replacing per-word patches: **R1** suppresses a fuzzy match whose source word is a real English word (`custom→customer`, `extract→extruct`, `table→teable`) — genuine typos still correct, and a node name spelled with separators (`Rabbit MQ → rabbitmq`) is kept; **R2** demotes an exact match to a *third-party* node whose key is an English word (`consolidate`/`reply`/`search`), requiring an explicit `<name> node` reference. First-party (`nodes-base` + `nodes-langchain`, incl. agent/chat/openai) always match bare.
+- Ships a lazy-loaded English-word oracle (`node_lookup_words.txt.gz`) plus a small in-code tech-vocabulary supplement (`async`/`loops`/`inbox`/`utils`/…). Loaded only when an R1/R2 check fires.
+- The entire GitHub issue/PR corpus (~5.5k items) was re-retained with this detector, so `node:<tag>` gotcha recall is clean across the board.
+- Tier-2 semantic recall now gates on the **gotcha-only** count: it fires when a detected node has zero known gotchas (restoring community how-to coverage) and is skipped when the node already has high-engagement bugs.
+- Removed the transition-era untagged gotcha fallback (corpus is now fully tagged; the Tier-2 gate covers zero-gotcha nodes).
+- Retry diagnostics route through the per-user `NK_DEBUG_LOG` (was a hardcoded `/tmp` path).
+
 ## 0.3.9 (2026-06-15)
 
 ### Version-aware bug surfacing (node-tagged gotcha recall)
