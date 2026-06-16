@@ -24,7 +24,7 @@ PASS=0; FAIL=0
 
 echo "=== node_lookup.py canonical-source parity ==="
 
-PINNED="7cc17940eb0bc0ac4f4653a7205656a8ac8a14f34586df254fcfaf5ef225c32b"
+PINNED="eeda1817d47c6b7643a18c35ad8953976baf78a6df661a4187d310de9e2da80e"
 ACTUAL="$(shasum -a 256 "$REPO_DIR/hooks/lib/node_lookup.py" | cut -d' ' -f1)"
 if [ "$ACTUAL" = "$PINNED" ]; then
   echo "  PASS: node_lookup.py matches the pinned canonical hash"; PASS=$((PASS + 1))

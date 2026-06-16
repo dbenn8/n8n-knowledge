@@ -65,6 +65,20 @@ def _load():
 # (graceful degradation to the prior behavior).
 _WORDS = None
 
+# Modern/technical English the traditional Unix word list predates and omits, so
+# the R1/R2 oracle would otherwise treat these as distinctive node names and miss
+# the FP. Each is a COMMON word, not a distinctive node: the third-party keys here
+# (async->asyncAi, utils->@bitovi.utils, loops->n8n-nodes-loops, inbox->inboxApp)
+# are exactly the dict-gap FPs we want demoted; the rest are non-keys or first-party
+# (webhook/npm/datetime/graphql) and unaffected by R2. Justified as a CATEGORY (tech
+# vocabulary), kept in code (reviewable) rather than baked into the binary word file.
+_DICT_SUPPLEMENT = frozenset({
+    "async", "await", "json", "yaml", "yml", "oauth", "webhook", "websocket",
+    "api", "sdk", "cli", "url", "uri", "http", "https", "regex", "env", "npm",
+    "util", "utils", "loop", "loops", "inbox", "plugin", "plugins", "middleware",
+    "runtime", "datetime", "timestamp", "uuid", "enum", "graphql", "e2e",
+})
+
 
 def _english_words():
     global _WORDS
@@ -73,9 +87,9 @@ def _english_words():
         try:
             import gzip
             with gzip.open(path, "rt") as f:
-                _WORDS = frozenset(f.read().split())
+                _WORDS = frozenset(f.read().split()) | _DICT_SUPPLEMENT
         except Exception:
-            _WORDS = frozenset()
+            _WORDS = _DICT_SUPPLEMENT
     return _WORDS
 
 
