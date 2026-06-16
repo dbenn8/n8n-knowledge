@@ -106,19 +106,14 @@ do_gotcha_recall() {
     sleep 1
     nk_debug_log_write "[$(date +%H:%M:%S)] gotcha_recall retry for $service (initial empty/failed)"
     result=$(recall_post "$body")
-
-    # Transition fallback: until the GitHub corpus is fully re-retained WITH
-    # node:<tag> tags, an all_strict node query legitimately returns 0 (no tagged
-    # memories yet). Fall back ONCE to the untagged task-aware semantic query so
-    # the plugin never regresses below today's behavior during the gradual
-    # re-retain. Once a node is tagged, this branch never fires.
-    if ! echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('results') else 1)" 2>/dev/null; then
-      local fb_body
-      fb_body=$(printf '{"query": %s, "budget": "low", "max_tokens": 2000, "include": {"source_facts": {}}}' \
-        "$query_escaped")
-      result=$(recall_post "$fb_body")
-    fi
   fi
+  # NOTE: the one-shot UNTAGGED semantic fallback that used to live here (a
+  # transition safety net while the GitHub corpus was being re-tagged with
+  # node:<tag>) was removed once the bulk re-retain completed (task #88). A
+  # node:<tag> all_strict query that legitimately returns 0 now stays empty;
+  # the auto-recall Tier-2 gate fires the broad semantic pass when gotcha_count
+  # == 0, so zero-gotcha nodes still get community coverage without polluting
+  # the all_strict gotcha channel with untagged cross-node noise.
 
   # Dedup near-identical facts of the SAME issue. The retain extracts a single
   # bug 5-8x from its title/body/comments (all sharing document_id
