@@ -22,11 +22,31 @@ service and the validator are open source and self-hostable — see
 
 ## Install
 
+In Claude Code, add this repo as a plugin marketplace, then install:
+
 ```bash
-/plugin install n8n-knowledge@n8n-knowledge-local
+/plugin marketplace add https://github.com/dbenn8/n8n-knowledge
+/plugin install n8n-knowledge@n8n-knowledge
+/reload-plugins
 ```
 
-Or clone and install as a local marketplace:
+No setup, API keys, or configuration required to start. The plugin ships with the node
+lookup dictionary checked in and points at the hosted knowledge service by default.
+
+**See it working.** The plugin injects context straight into Claude's turn, where only the
+model sees it. To watch exactly what it pulls in, tail its debug log in a second terminal:
+
+```bash
+tail -f ~/.cache/n8n-knowledge/debug.log
+```
+
+Every n8n-related prompt shows the docs, node specs, and known-bug warnings it injected. The
+log is owner-only (mode `0600`) under your cache dir; the `debugRecall` option controls
+verbosity (`summary` by default, `full` for everything).
+
+### Local development
+
+To work on the plugin from a clone, add it as a local marketplace instead:
 
 ```bash
 git clone https://github.com/dbenn8/n8n-knowledge.git
@@ -34,9 +54,6 @@ git clone https://github.com/dbenn8/n8n-knowledge.git
 # /plugin marketplace add /path/to/n8n-knowledge
 # /plugin install n8n-knowledge@n8n-knowledge-local
 ```
-
-No setup, API keys, or configuration required to start. The plugin ships with the node
-lookup dictionary checked in and points at the hosted knowledge service by default.
 
 ## Architecture
 
