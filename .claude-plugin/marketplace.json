@@ -1,0 +1,15 @@
+{
+  "name": "n8n-knowledge",
+  "owner": {
+    "name": "Dan Bennett"
+  },
+  "description": "n8n-knowledge — auto-recalls n8n docs and community knowledge inside Claude Code.",
+  "plugins": [
+    {
+      "name": "n8n-knowledge",
+      "source": "./",
+      "description": "Auto-recalls n8n documentation and community knowledge when working on n8n projects. Powered by a Hindsight graph memory database.",
+      "version": "0.3.10"
+    }
+  ]
+}
