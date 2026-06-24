@@ -224,6 +224,7 @@ Read it as a funnel — each stage a stricter bar than the last:
   fail in production — **the headline metric**
 - **pitfall%** — of the 28 known-bug prompts, the share the workflow handled
 
+<!-- AUTOGEN:eval-tables START -->
 **Claude Sonnet 4.6** — a full 128-prompt run on the current shipped plugin:
 
 | Condition | valid% | correct% | works% | pitfall% | $/run | turns |
@@ -237,6 +238,7 @@ Read it as a funnel — each stage a stricter bar than the last:
 |---|---|---|---|---|---|---|
 | **plugin (gate-ON)** | **92%** | **75%** | **67%** | **46%** | **$0.068** | 27.5 |
 | n8n-mcp | 79% | 70% | 62% | 36% | $0.093 | 38.1 |
+<!-- AUTOGEN:eval-tables END -->
 
 On the headline **works%**, the plugin's default beats n8n-mcp by **+21pp on Claude** (80 vs 59)
 and **+5pp on DeepSeek Flash** (67 vs 62) — while running **~40% cheaper** and with **~50% fewer
