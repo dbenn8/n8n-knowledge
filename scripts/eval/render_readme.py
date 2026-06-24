@@ -2,25 +2,33 @@
 import json
 import sys
 
-BACKEND_LABEL = {"claude": "Claude Sonnet 4.6", "deepseek": "DeepSeek v4 Flash"}
-# Editorial provenance suffix per backend (kept here so re-rendering preserves it).
-SUFFIX = {
-    "claude": " — a full 128-prompt run on the current shipped plugin:",
-    "deepseek": " — latest available per prompt:",
+# Display label per (backend, tier) group.
+TIER_LABEL = {
+    ("claude", None): "Claude Sonnet 4.6",
+    ("deepseek", "flash"): "DeepSeek v4 Flash",
+    ("deepseek", "pro"): "DeepSeek v4 Pro",
 }
-HEADER = "| Condition | valid% | correct% | works% | pitfall% | $/run | turns |\n|---|---|---|---|---|---|---|"
+# Editorial provenance suffix per group (kept here so re-rendering preserves it).
+SUFFIX = {
+    ("claude", None): " — a full 128-prompt run on the current shipped plugin:",
+    ("deepseek", "flash"): " — latest available per prompt:",
+    ("deepseek", "pro"): " — clean v4 Pro run (gate-ON vs n8n-mcp):",
+}
+HEADER = ("| Condition | valid% | correct% | works% | pitfall% | $/run | turns | time (mean / median) |\n"
+          "|---|---|---|---|---|---|---|---|")
 
 
-def _cell(cells, backend, prefix):
+def _cell(cells, backend, tier, prefix):
     for c in cells:
-        if c["backend"] == backend and c["condition"].startswith(prefix):
+        if c["backend"] == backend and c.get("tier") == tier and c["condition"].startswith(prefix):
             return c
     return None
 
 
 def _row(c, bold):
     vals = [f"{c['valid_pct']}%", f"{c['correct_pct']}%", f"{c['works_pct']}%",
-            f"{c['gotcha_pct']}%", f"${c['avg_cost']}", f"{c['turns']}"]
+            f"{c['gotcha_pct']}%", f"${c['avg_cost']}", f"{c['turns']}",
+            f"{c['time_mean_s']}s / {c['time_median_s']}s"]
     if bold:
         cells = ["**plugin (gate-ON, ship default)**"] + [f"**{v}**" for v in vals]
     else:
@@ -32,13 +40,14 @@ def render_eval_tables(presets):
     canon = next(p for p in presets if p["id"] == "canonical")
     cells = canon["summary"]["cells"]
     blocks = []
-    for backend in ("claude", "deepseek"):
-        plugin = _cell(cells, backend, "plugin gate-ON")
-        mcp = _cell(cells, backend, "mcp")
+    for backend, tier in [("claude", None), ("deepseek", "flash"), ("deepseek", "pro")]:
+        plugin = _cell(cells, backend, tier, "plugin gate-ON")
+        mcp = _cell(cells, backend, tier, "mcp")
         if not plugin or not mcp:
             continue
+        label = TIER_LABEL[(backend, tier)]
         blocks.append(
-            f"**{BACKEND_LABEL[backend]}**{SUFFIX.get(backend, '')}\n\n{HEADER}\n{_row(plugin, True)}\n{_row(mcp, False)}")
+            f"**{label}**{SUFFIX.get((backend, tier), '')}\n\n{HEADER}\n{_row(plugin, True)}\n{_row(mcp, False)}")
     return "\n\n".join(blocks)
 
 
