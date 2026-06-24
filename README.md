@@ -211,10 +211,11 @@ This is the trust section. Plainly:
 
 The plugin is benchmarked head-to-head against the community **n8n-mcp** server on a
 **128-prompt workflow-generation battery** — same prompts, same model, same scoring; the only
-variable is the tool. Two judges: every generated workflow is validated by the **n8n-mcp
-validation engine** (an independent open-source project, not n8n itself), and a **blinded
-Claude Opus judge** scores intent-fidelity and
-known-bug avoidance. Basis: newest run per prompt, integrity-cleaned. Snapshot: **June 23, 2026**.
+variable is the tool. Every generated workflow is validated by the **n8n-mcp validation engine**
+(an independent open-source project, not n8n itself), a **blinded Claude Opus judge** scores
+intent-fidelity, and **28 deterministic rules** — one per known bug — check known-bug avoidance
+straight from the workflow JSON, so anyone can audit it. Judge where you must, deterministic where
+you can. Basis: newest run per prompt, integrity-cleaned. Snapshot: **June 24, 2026**.
 
 Read it as a funnel — each stage a stricter bar than the last:
 
@@ -222,39 +223,48 @@ Read it as a funnel — each stage a stricter bar than the last:
 - **correct%** — valid *and* does what the prompt asked (blinded Opus judge)
 - **works%** — correct *and* designs around the relevant known n8n bug, so it won't silently
   fail in production — **the headline metric**
-- **pitfall%** — of the 28 known-bug prompts, the share the workflow handled
+- **pitfall%** — of the 28 known-bug prompts, the share the workflow designed around (scored by
+  28 deterministic rules, not the judge)
 
 <!-- AUTOGEN:eval-tables START -->
 **Claude Sonnet 4.6** — a full 128-prompt run on the current shipped plugin:
 
-| Condition | valid% | correct% | works% | pitfall% | $/run | turns |
-|---|---|---|---|---|---|---|
-| **plugin (gate-ON, ship default)** | **94%** | **93%** | **80%** | **39%** | **$0.75** | **9.8** |
-| n8n-mcp | 72% | 70% | 59% | 32% | $1.26 | 19.4 |
+| Condition | valid% | correct% | works% | pitfall% | $/run | turns | time (mean / median) |
+|---|---|---|---|---|---|---|---|
+| **plugin (gate-ON, ship default)** | **94%** | **93%** | **80%** | **39%** | **$0.752** | **9.8** | **375s / 269s** |
+| n8n-mcp | 72% | 70% | 59% | 32% | $1.256 | 19.4 | 601s / 367s |
 
 **DeepSeek v4 Flash** — latest available per prompt:
 
-| Condition | valid% | correct% | works% | pitfall% | $/run | turns |
-|---|---|---|---|---|---|---|
-| **plugin (gate-ON)** | **92%** | **75%** | **67%** | **46%** | **$0.068** | 27.5 |
-| n8n-mcp | 79% | 70% | 62% | 36% | $0.093 | 38.1 |
+| Condition | valid% | correct% | works% | pitfall% | $/run | turns | time (mean / median) |
+|---|---|---|---|---|---|---|---|
+| **plugin (gate-ON, ship default)** | **92%** | **75%** | **67%** | **46%** | **$0.024** | **27.5** | **430s / 321s** |
+| n8n-mcp | 79% | 70% | 62% | 36% | $0.033 | 38.1 | 347s / 265s |
+
+**DeepSeek v4 Pro** — clean v4 Pro run (gate-ON vs n8n-mcp):
+
+| Condition | valid% | correct% | works% | pitfall% | $/run | turns | time (mean / median) |
+|---|---|---|---|---|---|---|---|
+| **plugin (gate-ON, ship default)** | **98%** | **79%** | **68%** | **36%** | **$0.044** | **16.9** | **357s / 251s** |
+| n8n-mcp | 80% | 72% | 60% | 32% | $0.059 | 30.6 | 283s / 218s |
 <!-- AUTOGEN:eval-tables END -->
 
-On the headline **works%**, the plugin's default beats n8n-mcp by **+21pp on Claude** (80 vs 59)
-and **+5pp on DeepSeek Flash** (67 vs 62) — while running **~40% cheaper** and with **~50% fewer
-tool turns** on Claude. The edge holds on both backends, not just one.
+On the headline **works%**, the plugin's default beats n8n-mcp by **+21pp on Claude** (80 vs 59),
+**+5pp on DeepSeek Flash** (67 vs 62), and **+8pp on DeepSeek Pro** (68 vs 60) — while running
+**~40% cheaper** and with **~50% fewer tool turns** on Claude. The edge holds across all three
+cohorts, not just one.
 
 **Honest caveats:**
 
-- **Validator ≠ live import.** "Valid" means it passes the n8n-mcp validator (the engine n8n
-  ships node definitions from), not that it executed on a live n8n instance — a disclosed
-  trade-off for reproducibility.
+- **Validator ≠ live import.** "Valid" means it passes the independent n8n-mcp validator, not
+  that it executed on a live n8n instance — a disclosed trade-off for reproducibility.
 - **Known-bug provenance.** Some bug-prompts share a corpus with the catalog the plugin recalls
   from, so pitfall% flatters the plugin. Reported as a directional signal, not a clean win.
-- **The judge is an LLM.** The Opus judge is blinded and cached — a second opinion alongside the
-  deterministic validator, never ground truth on its own.
-- **DeepSeek here is v4 Flash, not Pro.** Every DeepSeek number above was collected on DeepSeek
-  **v4 Flash**; v4 Pro runs are in progress and will be reported separately.
+- **The judge is an LLM.** The Opus judge is blinded and cached, and scores intent only — pitfall
+  avoidance is scored separately by the 28 deterministic rules, never the judge.
+- **DeepSeek Flash vs Pro are separate cohorts.** Flash numbers are latest-per-prompt across the
+  repriced v4 Flash history; Pro is a clean v4 Pro run. They're reported in separate tables, not
+  pooled.
 
 Reproduce it: the harness, prompt set, and scoring live in [`scripts/eval/`](scripts/eval/). A
 fuller write-up with methodology is in the [eval case study](https://danb.bio/projects/n8n-evals).
