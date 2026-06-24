@@ -15,10 +15,14 @@ validator microservice or by a local `n8n-mcp` install you point it at. Both the
 service and the validator are open source and self-hostable — see
 [n8n-hindsight](https://github.com/dbenn8/n8n-hindsight).
 
-> **Trust note up front:** auto-recall sends your prompt text to the author's hosted recall
-> endpoint when n8n context is detected, and the optional validator can send your workflow
-> JSON to a cloud service. Read [What data leaves your machine](#what-data-leaves-your-machine)
-> before installing. Everything is local-only or self-hostable if you'd rather it not.
+> **Privacy:** auto-recall sends your prompt text to the author's hosted recall endpoint when
+> n8n context is detected, and the optional validator can send your workflow JSON to a cloud
+> service. Read [What data leaves your machine](#what-data-leaves-your-machine) before installing.
+> The **validator can run fully local** (point it at a local `n8n-mcp` install). The **knowledge
+> database is not local** — recall is served from the author's hosted `n8n` Hindsight bank. The
+> [n8n-hindsight](https://github.com/dbenn8/n8n-hindsight) stack is open source and self-hostable,
+> but reproducing a populated bank of this size is substantial work, so in practice recall talks to
+> the hosted endpoint unless you stand up and fill your own instance.
 
 ## Install
 
@@ -88,6 +92,13 @@ flowchart TD
     PT -->|"workflow JSON (local mode)"| LOCALV
     PT -.->|"preflight parity check"| VH
     VH -.->|"hash/version match → run<br/>mismatch → fail closed"| PT
+
+    %% Layout only: force the three sections to stack vertically (top → bottom)
+    %% instead of an L-shape, so nothing sits in the bottom-right corner where
+    %% GitHub's diagram zoom/pan controls render and would otherwise cover it.
+    local ~~~ svc
+    svc ~~~ val
+    val ~~~ LOCALV
 ```
 
 - **Recall path:** prompt text (+ tag filters for detected node names) goes to
