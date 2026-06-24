@@ -15,11 +15,17 @@ import os
 import re
 import socketserver
 import sqlite3
+import statistics
 import subprocess
 import sys
 import threading
 import time
 import urllib.parse
+
+
+def _median_s(times_ms):
+    vals = [t for t in times_ms if t is not None]
+    return round(statistics.median(vals) / 1000) if vals else None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_DIR = os.path.abspath(os.path.join(HERE, ".."))          # scripts/eval
@@ -200,7 +206,7 @@ def facets(rows):
 ROW_KEY_COLS = ("run_id", "condition", "prompt_idx", "run_number")
 
 
-def get_summary(sysprompt, scope, basis):
+def get_summary(sysprompt, scope, basis, pro_run_ids=()):
     con = db()
     where = "1=1"
     params = []
@@ -211,10 +217,24 @@ def get_summary(sysprompt, scope, basis):
     gotcha_only = scope == "gotcha"
     universe = 28 if gotcha_only else 128
     out = []
-    for backend in ("deepseek", "claude"):
+
+    # (group_key_backend, tier, run_clause, run_params)
+    if pro_run_ids:
+        ph = ",".join("?" * len(pro_run_ids))
+        groups = [
+            ("claude", None, "", []),
+            ("deepseek", "flash", f" AND r.run_id NOT IN ({ph})", list(pro_run_ids)),
+            ("deepseek", "pro", f" AND r.run_id IN ({ph})", list(pro_run_ids)),
+        ]
+    else:
+        groups = [("claude", None, "", []), ("deepseek", None, "", [])]
+
+    for backend, tier, run_clause, run_params in groups:
+        where_g = where + run_clause
+        params_g = params + run_params
         cells = []
         for label, cond, gate in report.CELLS:
-            d = report.cell_prompt_stats(con, where, params, backend, cond, gate, gotcha_only, basis)
+            d = report.cell_prompt_stats(con, where_g, params_g, backend, cond, gate, gotcha_only, basis)
             if d:
                 cells.append((label, d))
         if not cells:
@@ -236,8 +256,9 @@ def get_summary(sysprompt, scope, basis):
             gotcha = (100 * mean([d[i]["addr"] / d[i]["inst"] for i in gidxs])) if gidxs else None
             nvalp = sum(1 for i in idxs if d[i]["val"])
             njudp = sum(1 for i in idxs if d[i]["judged"])
+            times = [d[i]["tms"] for i in idxs]
             out.append({
-                "backend": backend, "condition": label, "cover": f"{len(d)}/{universe}",
+                "backend": backend, "tier": tier, "condition": label, "cover": f"{len(d)}/{universe}",
                 "gotcha_pct": round(gotcha) if gotcha is not None else None,
                 "valid_pct": round(valid),
                 "correct_pct": round(valid * intent / 100) if intent is not None else None,
@@ -245,6 +266,8 @@ def get_summary(sysprompt, scope, basis):
                 "judged_pct": round(100 * njudp / nvalp) if nvalp else None,
                 "avg_cost": round(mean([d[i]["cost"] for i in idxs]), 3),
                 "turns": round(mean([d[i]["turns"] for i in idxs]), 1),
+                "time_mean_s": round(mean([t for t in times if t is not None]) / 1000) if any(t is not None for t in times) else None,
+                "time_median_s": _median_s(times),
                 "inst": sum(d[i]["inst"] for i in idxs),
             })
     con.close()
