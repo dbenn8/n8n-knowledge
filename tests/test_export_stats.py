@@ -74,6 +74,16 @@ def test_gotcha_preset_rows_are_all_bug_prompts():
     assert all(str(r.get("gotcha_prompt")) == "1" for r in gotcha["rows"])
 
 
+def test_canonical_has_three_groups_and_time():
+    exp = _export()
+    server = exp.load_server()
+    stats = exp.build_stats(server, generated_at="t", db_sha256="h")
+    cells = next(p for p in stats["presets"] if p["id"] == "canonical")["summary"]["cells"]
+    tiers = {(c["backend"], c["tier"]) for c in cells}
+    assert ("deepseek", "flash") in tiers and ("deepseek", "pro") in tiers
+    assert all("time_median_s" in c for c in cells)
+
+
 def test_stats_is_json_serializable():
     exp = _export()
     server = exp.load_server()

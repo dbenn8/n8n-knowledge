@@ -34,6 +34,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))  # scripts/eval
 # dropped — they are simply not publishable cuts.
 PUBLISH_PRESET_IDS = ("canonical", "gotcha", "canonical_full")
 
+# DeepSeek Pro run-id cohort (override via env DEEPSEEK_PRO_RUN_IDS="a,b"). Flash = deepseek
+# runs NOT in this set; Pro = deepseek runs IN this set. Passed to get_summary so the published
+# stats split DeepSeek into v4 Flash / v4 Pro tiers (the Pro run is newest per prompt and would
+# otherwise silently overwrite Flash under the canonical newest-run-per-prompt basis).
+DEEPSEEK_PRO_RUN_IDS = tuple(
+    os.environ.get("DEEPSEEK_PRO_RUN_IDS", "20260624-135803-v2,20260624-122555-v2").split(",")
+)
+
 
 def load_server():
     """Load dashboard/server.py as a module (defines PRESETS, get_summary, get_rows,
@@ -70,7 +78,7 @@ def build_stats(server, generated_at, db_sha256):
     for pid in PUBLISH_PRESET_IDS:
         p = by_id[pid]
         s = p["summary"]
-        summary = server.get_summary(s["sysprompt"], s["scope"], s["basis"])
+        summary = server.get_summary(s["sysprompt"], s["scope"], s["basis"], pro_run_ids=DEEPSEEK_PRO_RUN_IDS)
         rows = server.filter_rows(rows_all, p.get("rows") or {})
         presets.append({"id": pid, "label": p["label"], "summary": summary, "rows": rows})
     return {"generated_at": generated_at, "db_sha256": db_sha256, "presets": presets}
