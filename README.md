@@ -198,32 +198,52 @@ This is the trust section. Plainly:
 
 ## Eval results (honest comparison)
 
-The plugin was benchmarked against the community **n8n-mcp** server on a **128-prompt
-workflow-generation benchmark** (June 11, 2026, spec-injection v2). The validated-workflow
-metric is "does the generated workflow pass n8n-mcp's full validation engine."
+The plugin is benchmarked head-to-head against the community **n8n-mcp** server on a
+**128-prompt workflow-generation battery** — same prompts, same model, same scoring; the only
+variable is the tool. Two judges: every generated workflow is validated by the **real n8n
+validation engine** (n8n-mcp), and a **blinded Claude Opus judge** scores intent-fidelity and
+known-bug avoidance. Basis: newest run per prompt, integrity-cleaned. Snapshot: **June 23, 2026**.
 
-| Model          | Plugin (validated) | n8n-mcp condition | Delta            |
-|----------------|--------------------|-------------------|------------------|
-| DeepSeek       | 64.8%              | 66.4%             | −1.6pp (MCP ahead) |
-| Claude Sonnet  | 62.5%              | 60.9%             | +1.6pp (plugin ahead) |
+Read it as a funnel — each stage a stricter bar than the last:
 
-**Read this honestly:** on raw validation pass rate the plugin and the MCP server are
-**effectively tied** — within ~1.6 percentage points either direction depending on the model.
-The plugin is not a validation-quality silver bullet.
+- **valid%** — passes the real n8n validator (it would import)
+- **correct%** — valid *and* does what the prompt asked (blinded Opus judge)
+- **works%** — correct *and* designs around the relevant known n8n bug, so it won't silently
+  fail in production — **the headline metric**
+- **pitfall%** — of the 28 known-bug prompts, the share the workflow handled
 
-Where the plugin *does* differ:
+**Claude Sonnet 4.6** — a full 128-prompt run on the current shipped plugin:
 
-- **Tokens:** the plugin uses roughly **35–40% fewer tokens** than the MCP condition — it
-  injects the relevant specs as context instead of making the model drive a tool-call loop.
-- **Tool turns:** far fewer tool round-trips (the MCP condition spends turns searching and
-  fetching; the plugin front-loads the context).
-- **Gotcha awareness:** the plugin surfaces **1.5–2× more known-bug "gotchas"** (designing
-  around documented n8n issues) because issue/community context is injected, not just node schemas.
+| Condition | valid% | correct% | works% | pitfall% | $/run | turns |
+|---|---|---|---|---|---|---|
+| **plugin (gate-ON, ship default)** | **94%** | **93%** | **80%** | **39%** | **$0.75** | **9.8** |
+| n8n-mcp | 72% | 70% | 59% | 32% | $1.26 | 19.4 |
 
-So: comparable correctness, materially cheaper, and better at avoiding known footguns. An
-earlier, differently-scored run is committed at
-[`docs/eval-findings-run1.md`](docs/eval-findings-run1.md) — the numbers there are older and
-not directly comparable to the v2 figures above.
+**DeepSeek v4 Flash** — latest available per prompt:
+
+| Condition | valid% | correct% | works% | pitfall% | $/run | turns |
+|---|---|---|---|---|---|---|
+| **plugin (gate-ON)** | **92%** | **75%** | **67%** | **46%** | **$0.068** | 27.5 |
+| n8n-mcp | 79% | 70% | 62% | 36% | $0.093 | 38.1 |
+
+On the headline **works%**, the plugin's default beats n8n-mcp by **+21pp on Claude** (80 vs 59)
+and **+5pp on DeepSeek Flash** (67 vs 62) — while running **~40% cheaper** and with **~50% fewer
+tool turns** on Claude. The edge holds on both backends, not just one.
+
+**Honest caveats:**
+
+- **Validator ≠ live import.** "Valid" means it passes the n8n-mcp validator (the engine n8n
+  ships node definitions from), not that it executed on a live n8n instance — a disclosed
+  trade-off for reproducibility.
+- **Known-bug provenance.** Some bug-prompts share a corpus with the catalog the plugin recalls
+  from, so pitfall% flatters the plugin. Reported as a directional signal, not a clean win.
+- **The judge is an LLM.** The Opus judge is blinded and cached — a second opinion alongside the
+  deterministic validator, never ground truth on its own.
+- **DeepSeek here is v4 Flash, not Pro.** Every DeepSeek number above was collected on DeepSeek
+  **v4 Flash**; v4 Pro runs are in progress and will be reported separately.
+
+Reproduce it: the harness, prompt set, and scoring live in [`scripts/eval/`](scripts/eval/). A
+fuller write-up with methodology is in the [eval case study](https://danb.bio/projects/n8n-evals).
 
 ## Configuration
 
