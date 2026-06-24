@@ -6,7 +6,7 @@ A Claude Code plugin that makes Claude better at n8n. When it detects you're wor
 n8n, hooks automatically recall curated n8n knowledge (docs, GitHub issues with status,
 community workarounds, node specs) and inject it as context — no web-search permissions, no
 MCP server, no API keys. When Claude writes a workflow JSON file, an optional `PostToolUse`
-hook validates it against the real n8n validation engine, feeds the errors back, and lets
+hook validates it against the n8n-mcp validation engine, feeds the errors back, and lets
 Claude fix them in the same turn.
 
 The knowledge is served by a hosted [Hindsight](https://github.com/dbenn8/n8n-hindsight)
@@ -200,13 +200,14 @@ This is the trust section. Plainly:
 
 The plugin is benchmarked head-to-head against the community **n8n-mcp** server on a
 **128-prompt workflow-generation battery** — same prompts, same model, same scoring; the only
-variable is the tool. Two judges: every generated workflow is validated by the **real n8n
-validation engine** (n8n-mcp), and a **blinded Claude Opus judge** scores intent-fidelity and
+variable is the tool. Two judges: every generated workflow is validated by the **n8n-mcp
+validation engine** (an independent open-source project, not n8n itself), and a **blinded
+Claude Opus judge** scores intent-fidelity and
 known-bug avoidance. Basis: newest run per prompt, integrity-cleaned. Snapshot: **June 23, 2026**.
 
 Read it as a funnel — each stage a stricter bar than the last:
 
-- **valid%** — passes the real n8n validator (it would import)
+- **valid%** — passes the n8n-mcp validator (it would import)
 - **correct%** — valid *and* does what the prompt asked (blinded Opus judge)
 - **works%** — correct *and* designs around the relevant known n8n bug, so it won't silently
   fail in production — **the headline metric**
