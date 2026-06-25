@@ -233,6 +233,7 @@ Read it as a funnel — each stage a stricter bar than the last:
 |---|---|---|---|---|---|---|---|
 | **plugin (gate-ON, ship default)** | **94%** | **93%** | **80%** | **39%** | **$0.752** | **9.8** | **375s / 269s** |
 | n8n-mcp | 72% | 70% | 59% | 32% | $1.256 | 19.4 | 601s / 367s |
+| raw model — no tools (78/128) | 26% | 26% | 26% | 29% | $0.58 | 3.7 | 359s / 156s |
 
 **DeepSeek v4 Flash** — latest available per prompt:
 
@@ -240,6 +241,7 @@ Read it as a funnel — each stage a stricter bar than the last:
 |---|---|---|---|---|---|---|---|
 | **plugin (gate-ON, ship default)** | **92%** | **75%** | **67%** | **46%** | **$0.024** | **27.5** | **430s / 321s** |
 | n8n-mcp | 79% | 70% | 62% | 36% | $0.033 | 38.1 | 347s / 265s |
+| raw model — no tools | 9% | — | — | 36% | $0.013 | 10.2 | 228s / 177s |
 
 **DeepSeek v4 Pro** — clean v4 Pro run (gate-ON vs n8n-mcp):
 
@@ -253,6 +255,13 @@ On the headline **works%**, the plugin's default beats n8n-mcp by **+21pp on Cla
 **+5pp on DeepSeek Flash** (67 vs 62), and **+8pp on DeepSeek Pro** (68 vs 60) — while running
 **~40% cheaper** and with **~50% fewer tool turns** on Claude. The edge holds across all three
 cohorts, not just one.
+
+The **raw model — no tools** row is the status-quo baseline: the same model, same prompts, no
+plugin and no n8n-mcp. It's where most people start, and it produces a *valid, working* workflow
+only ~1-in-4 times (Claude **26%**, DeepSeek Flash **9%**) — versus **80%** works with the plugin.
+The Claude baseline is measured over 78/128 prompts (all three difficulty groups sampled: a 48%,
+b 64%, c 73%); weighting each group's rate up to the full corpus lands at ~26% too, so the
+sample is representative.
 
 **Honest caveats:**
 
