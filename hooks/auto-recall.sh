@@ -24,6 +24,30 @@ build_validator_guidance() {
 Build the workflow by writing it to a .json file and editing THAT file as you go — the validator runs automatically on each file write and returns targeted feedback. The saved file is the importable deliverable; build it there rather than only describing or pasting it.
 - INVALID: make only the targeted edits listed, re-write the file, wait for the next result
 - VALID: verify the workflow fully solves the user's request. Tell the user the filename so they can import it directly into n8n."
+  # Hardened "design-around-known-bugs" gate — SHIPS ON by default
+  # (plugin option gotchaDesignGate, default true). Eval 20260616 showed the model
+  # receiving a KNOWN BUG warning in the recalled Knowledge Base (e.g. the Wait node
+  # bug — it even quoted the issue) yet still wiring up the buggy node: the passive
+  # "use the workaround" framing wasn't enough. This gate forces an explicit reconcile
+  # step before the workflow finalizes, worth +7-11pp on the gotcha benchmark across
+  # DeepSeek and Sonnet (at a modest cost/turn increase on DeepSeek).
+  # Override precedence: the eval env N8N_KNOWLEDGE_GOTCHA_GATE (1/hardened/true → on,
+  # 0/false → off) wins over the plugin option, for A/B testing both stories.
+  local gate="${CLAUDE_PLUGIN_OPTION_GOTCHADESIGNGATE:-true}"
+  case "${N8N_KNOWLEDGE_GOTCHA_GATE:-}" in
+    1|hardened|true) gate=true ;;
+    0|false) gate=false ;;
+  esac
+  if [ "$gate" = "true" ]; then
+    printf '%s' "
+
+## Known-bug design gate — MANDATORY before you finalize
+The n8n Knowledge Base context below flags specific nodes as KNOWN BUG. Two states matter: [OPEN] = unresolved; [CLOSED·not_planned] = n8n will NOT fix it. For EVERY node in your workflow that the Knowledge Base flags as [OPEN] or [CLOSED·not_planned], you MUST use the documented workaround node/approach. This is not optional, and there is NO version exemption:
+- Do NOT assume the bug is fixed in your n8n version — you do not know the user's version. The version numbers in the Knowledge Base are the REPORTER's environment, never a fixed-in version. An [OPEN] issue is unresolved as of this knowledge; treat the bug as present.
+- \"It's closed\", \"it's a duplicate\", \"we're probably on a newer/patched version\", or assuming a high version number are NOT acceptable reasons to keep the buggy node. [CLOSED·not_planned] specifically means it stays broken forever.
+- The ONLY way to keep a flagged node is if the Knowledge Base text EXPLICITLY says the bug was fixed in a specific named release. Absent that exact statement, swap to the workaround.
+Before writing the final file, list each flagged node and the workaround you put in its place. A workflow that wires up a flagged [OPEN]/[CLOSED·not_planned] node without its workaround is a FAILED build, even if it is schema-valid."
+  fi
 }
 
 # Check if auto-recall is enabled (default: true)

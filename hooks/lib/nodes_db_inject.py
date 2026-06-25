@@ -154,16 +154,23 @@ def build_cheatsheet(node_types, db_path=None):
     # queried). Char-cap truncation can drop more; tracked separately below.
     omitted_by_node_cap = max(0, len(node_types) - _MAX_NODES)
 
+    # Output ordering lives in output_names/outputs on newer nodes.db builds; guard so
+    # older DBs (without these columns) still work.
+    _cols = {r[1] for r in db.execute("PRAGMA table_info(nodes)")}
+    _out_sel = (", output_names, outputs"
+                if ("output_names" in _cols or "outputs" in _cols) else ", NULL, NULL")
+
     for nt in node_types[:_MAX_NODES]:
         row = db.execute(
-            "SELECT display_name, version, operations, properties_schema FROM nodes WHERE node_type=?",
+            "SELECT display_name, version, operations, properties_schema"
+            + _out_sel + " FROM nodes WHERE node_type=?",
             (nt,),
         ).fetchone()
 
         if not row:
             continue
 
-        display_name, version, ops_json, props_json = row
+        display_name, version, ops_json, props_json, outnames_json, outputs_json = row
 
         # Restore full node type for Claude (nodes-base.slack → n8n-nodes-base.slack)
         full_nt = f"n8n-{nt}" if nt.startswith("nodes-") else nt
@@ -204,6 +211,27 @@ def build_cheatsheet(node_types, db_path=None):
                 lines.append('  String operations: equals, notEquals, contains, '
                              'startsWith, endsWith, regex')
                 lines.append('  Number operations: equals, notEquals, gt, gte, lt, lte')
+
+        # Output ordering for multi-output nodes. Wiring a branch to the wrong output
+        # INDEX produces a schema-VALID but broken workflow (e.g. Split In Batches
+        # done=0/loop=1, If true=0/false=1) — a top real-world failure that validation
+        # cannot catch. The connection index order is fixed and often counterintuitive.
+        out_names = None
+        for col in (outnames_json, outputs_json):
+            if not col:
+                continue
+            try:
+                parsed = json.loads(col)
+            except Exception:
+                continue
+            if isinstance(parsed, list) and len(parsed) > 1 and all(isinstance(x, str) for x in parsed):
+                out_names = parsed
+                break
+        if out_names:
+            lines.append("Outputs — wire each branch to the EXACT output index below "
+                         "(order is fixed and can be counterintuitive):")
+            for i, name in enumerate(out_names):
+                lines.append(f'  output index {i} = "{name}"')
 
         sections.append("\n".join(lines))
 
@@ -251,6 +279,228 @@ def build_cheatsheet(node_types, db_path=None):
         )
 
     return result
+
+
+def workflow_node_types(workflow):
+    """Distinct node types present in a workflow JSON, normalized to nodes.db form
+    (n8n-nodes-base.X -> nodes-base.X, @n8n/n8n-nodes-langchain.X -> nodes-langchain.X)."""
+    out, seen = [], set()
+    for n in (workflow.get("nodes") or []):
+        nt = n.get("type", "")
+        if not nt:
+            continue
+        if nt.startswith("@n8n/n8n-"):
+            db = nt[len("@n8n/n8n-"):]
+        elif nt.startswith("n8n-"):
+            db = nt[len("n8n-"):]
+        else:
+            db = nt
+        if db not in seen:
+            seen.add(db)
+            out.append(db)
+    return out
+
+
+def multi_output_note(workflow, db_path=None):
+    """Compact output-ordering reminder for every multi-output node ACTUALLY USED in
+    the workflow — independent of whether the node was named in the prompt. This is the
+    targeted fix for model-ADDED loop/branch nodes (Split In Batches, If, Switch, …)
+    being wired to the wrong output index (schema-valid but broken). Returns a string
+    or None."""
+    db_path = db_path or _find_db()
+    if not db_path:
+        return None
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception:
+        return None
+    cols = {r[1] for r in db.execute("PRAGMA table_info(nodes)")}
+    if not ("output_names" in cols or "outputs" in cols):
+        return None
+    lines = []
+    for nt in workflow_node_types(workflow):
+        row = db.execute(
+            "SELECT display_name, output_names, outputs FROM nodes WHERE node_type=?", (nt,)
+        ).fetchone()
+        if not row:
+            continue
+        display_name, outn_json, outs_json = row
+        names = None
+        for col in (outn_json, outs_json):
+            if not col:
+                continue
+            try:
+                parsed = json.loads(col)
+            except Exception:
+                continue
+            if isinstance(parsed, list) and len(parsed) > 1 and all(isinstance(x, str) for x in parsed):
+                names = parsed
+                break
+        if names:
+            order = ", ".join(f'index {i}="{n}"' for i, n in enumerate(names))
+            lines.append(f"  {display_name}: {order}")
+    if not lines:
+        return None
+    return ("Multi-output node wiring — these nodes you used have a FIXED, often "
+            "counterintuitive output order. Wire each branch to the correct index "
+            "(e.g. the loop/iteration body to \"loop\", post-loop steps to \"done\"):\n"
+            + "\n".join(lines))
+
+
+def _reaches(start_nodes, target, conns):
+    """True if any node in start_nodes can reach `target` by following main connections."""
+    seen, stack = set(), list(start_nodes)
+    while stack:
+        n = stack.pop()
+        if n == target:
+            return True
+        if n in seen:
+            continue
+        seen.add(n)
+        for branch in (conns.get(n, {}).get("main", []) or []):
+            for b in (branch or []):
+                stack.append(b["node"])
+    return False
+
+
+def detect_reversed_loop(workflow, db_path=None):
+    """Conservative, data-driven detector for reversed loop-node wiring (the schema-VALID
+    but functionally-dead #1 failure). For any node whose nodes.db output_names include
+    'loop', find which output index actually loops back to the node; if a NON-'loop'
+    output loops back (i.e. the loop body is on 'done' instead of 'loop'), it's reversed.
+    Only flags genuine reversals — correct or non-looping wirings return nothing, so it
+    can't push a correct workflow into a fix. Returns a list of issue dicts."""
+    db_path = db_path or _find_db()
+    if not db_path:
+        return []
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception:
+        return []
+    cols = {r[1] for r in db.execute("PRAGMA table_info(nodes)")}
+    if not ("output_names" in cols or "outputs" in cols):
+        return []
+    conns = workflow.get("connections", {}) or {}
+    issues = []
+    for node in (workflow.get("nodes") or []):
+        nt, name = node.get("type", ""), node.get("name")
+        if not name:
+            continue
+        if nt.startswith("@n8n/n8n-"):
+            db_nt = nt[len("@n8n/n8n-"):]
+        elif nt.startswith("n8n-"):
+            db_nt = nt[len("n8n-"):]
+        else:
+            db_nt = nt
+        row = db.execute("SELECT output_names, outputs FROM nodes WHERE node_type=?", (db_nt,)).fetchone()
+        if not row:
+            continue
+        names = None
+        for col in row:
+            if not col:
+                continue
+            try:
+                parsed = json.loads(col)
+            except Exception:
+                continue
+            if isinstance(parsed, list) and parsed and all(isinstance(x, str) for x in parsed):
+                names = parsed
+                break
+        lower = [n.lower() for n in (names or [])]
+        if not names or "loop" not in lower:
+            continue  # only loop nodes have a reversal failure mode
+        loop_idx = lower.index("loop")
+        node_main = conns.get(name, {}).get("main", []) or []
+        back_idx = None
+        for i, branch in enumerate(node_main):
+            starts = [b["node"] for b in (branch or [])]
+            if starts and _reaches(starts, name, conns):
+                back_idx = i
+                break
+        if back_idx is not None and back_idx != loop_idx:
+            issues.append({
+                "node": name, "wrong_output": names[back_idx] if back_idx < len(names) else f"index {back_idx}",
+                "wrong_index": back_idx, "loop_output": names[loop_idx], "loop_index": loop_idx,
+            })
+    return issues
+
+
+# Per-caveat body cap and how many caveat lines to emit — keep this injection compact
+# (it rides alongside the schema cheatsheet inside the 10K additionalContext budget).
+_CAVEAT_BODY_MAX = 220
+_CAVEAT_MAX = 6
+
+
+def _clean_md(s):
+    """Strip Markdown link syntax and MkDocs attribute lists down to plain prose so a
+    caveat reads cleanly in injected context: [text](url){:attrs} -> text, drop {:...}."""
+    if not s:
+        return ""
+    s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", s)  # [text](url) -> text
+    s = re.sub(r"\{:[^}]*\}", "", s)                # {:target=_blank .external-link}
+    s = re.sub(r"\{[^}]*\}", "", s)                 # any leftover {attr} block
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _parse_warning_admonitions(documentation):
+    """Extract n8n's curated `/// warning | Title ... ///` admonition blocks from a
+    node's documentation. Returns a list of (title, body) tuples, both cleaned of
+    Markdown. ONLY the explicit `warning` admonition is matched — incidental substrings
+    ('unimportant'), doc-lint HTML comments, and operation names like 'Warninglist' are
+    deliberately ignored (they are not real caveats)."""
+    if not documentation:
+        return []
+    out = []
+    for raw in re.findall(r"///\s*warning\b(.*?)///", documentation, re.S | re.I):
+        block = raw.strip()
+        if block.startswith("|"):
+            block = block[1:].strip()
+        title, _, body = block.partition("\n")
+        out.append((_clean_md(title), _clean_md(body)))
+    return out
+
+
+def node_caveats_note(workflow, db_path=None):
+    """Compact 'known caveats' note for the nodes ACTUALLY USED in a workflow, sourced
+    from n8n's curated `/// warning` admonitions in nodes.db (deprecations, free-plan
+    limits, queue-mode/SSL restrictions, …). These are real user-facing gotchas the
+    workflow validator can never surface. Returns a string or None.
+
+    Like multi_output_note, this keys off the nodes present in the workflow JSON (so it
+    also covers model-ADDED nodes), not just nodes named in the prompt."""
+    db_path = db_path or _find_db()
+    if not db_path:
+        return None
+    try:
+        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception:
+        return None
+    cols = {r[1] for r in db.execute("PRAGMA table_info(nodes)")}
+    if "documentation" not in cols:
+        return None
+    lines = []
+    for nt in workflow_node_types(workflow):
+        row = db.execute(
+            "SELECT display_name, documentation FROM nodes WHERE node_type=?", (nt,)
+        ).fetchone()
+        if not row:
+            continue
+        display_name, doc = row
+        for title, body in _parse_warning_admonitions(doc):
+            if len(body) > _CAVEAT_BODY_MAX:
+                body = body[:_CAVEAT_BODY_MAX].rstrip() + "…"
+            caveat = f"{title} — {body}" if body else title
+            lines.append(f"  {display_name}: {caveat}")
+            if len(lines) >= _CAVEAT_MAX:
+                break
+        if len(lines) >= _CAVEAT_MAX:
+            break
+    db.close()
+    if not lines:
+        return None
+    return ("Node caveats — official n8n warnings for nodes in this workflow (deprecations, "
+            "plan/version limits, or restrictions). Account for these or pick a different "
+            "node where one is deprecated/unsupported:\n" + "\n".join(lines))
 
 
 def main():

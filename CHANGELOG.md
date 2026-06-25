@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.11 (2026-06-25)
+
+### Build-layer injection + gotcha design gate (the benchmarked plugin)
+- **Curated node caveats** — injects per-node deprecation/limit warnings read generically from `nodes.db`, so the model designs around documented node constraints before writing the workflow.
+- **Multi-output wiring + output ordering** — for nodes the model actually used, injects the node's output structure and ordering so multi-output nodes (IF, Switch, etc.) are wired correctly.
+- **Reversed-loop soft-fail** — a schema-valid but structurally broken loop (reversed wiring) is now soft-failed so the validator forces a fix instead of passing it through.
+- **Gotcha design gate ON by default** — new `gotchaDesignGate` option (default `true`, replacing `workflowValidationBudgetMode`): injects a hardened "design-around-known-bugs" directive that reconciles every node flagged with a known `[OPEN]`/`[CLOSED·not_planned]` bug against its documented workaround. This is the **ship default** the published benchmark measures.
+
 ## 0.3.10 (2026-06-16)
 
 ### Node-detection precision (general FP rules) + corpus re-tag

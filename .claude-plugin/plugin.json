@@ -2,7 +2,7 @@
   "name": "n8n-knowledge",
   "displayName": "n8n Knowledge Base",
   "description": "Auto-recalls n8n documentation and community knowledge when working on n8n projects. Powered by a Hindsight graph memory database with 315+ pages of official n8n docs.",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "author": {
     "name": "Dan Bennett"
   },
@@ -23,7 +23,7 @@
     "enableWorkflowValidation": { "type": "boolean", "title": "Enable Workflow Validation", "description": "Experimental plugin-side validation after Claude writes or edits workflow JSON files. Injects validator feedback back into the turn. Disabled by default.", "default": false },
     "workflowValidationMaxCalls": { "type": "number", "title": "Workflow Validation Max Calls", "description": "Max plugin-side validator calls per session when workflow validation is enabled.", "default": 3 },
     "workflowEditStyle": { "type": "string", "title": "Workflow Edit Style", "description": "How validator feedback asks the model to repair an invalid workflow. 'surgical' (default): patch only failing nodes via scripted JSON edits using a !!DRAFT!! marker, then trigger one re-validation — far fewer output tokens on large workflows, with automatic fallback to a full rewrite when repair rounds stall. 'rewrite': batch all fixes into one full re-write.", "default": "surgical" },
-    "workflowValidationBudgetMode": { "type": "string", "title": "Workflow Validation Budget Mode", "description": "'adaptive' (default): only stagnant rounds spend budget — an INVALID round that reduced the error count vs the previous round is free; a hard ceiling of 3x max-calls total calls always applies. 'static': every validator call spends one unit of the max-calls budget.", "default": "adaptive" },
+    "gotchaDesignGate": { "type": "boolean", "title": "Gotcha Design Gate", "description": "When building a workflow with validation enabled, inject a hardened 'design-around-known-bugs' directive that forces the model to reconcile every node flagged with a known [OPEN]/[CLOSED·not_planned] n8n bug against its documented workaround before finalizing — and refuses 'it's probably fixed in my version' rationalizations. Measurably improves designing around real bugs (~+7-11pp on the gotcha benchmark) at a modest cost/turn increase. Disable to trade gotcha coverage for lower cost.", "default": true },
     "enableBackstopRecall": { "type": "boolean", "title": "Enable Backstop Recall", "description": "Refresh n8n context during agent reasoning (after Edit/Write/Task). Disable to save tokens.", "default": true },
     "backstopRecallCap": { "type": "number", "title": "Backstop Recall Cap", "description": "Max backstop recalls per session.", "default": 4 },
     "backstopRecallMaxTokens": { "type": "number", "title": "Backstop Recall Max Tokens", "description": "Returned-context size cap per backstop recall.", "default": 8000 },

@@ -1,6 +1,6 @@
 # n8n Knowledge — Claude Code Plugin
 
-**v0.3.10**
+**v0.3.11**
 
 A Claude Code plugin that makes Claude better at n8n. When it detects you're working on
 n8n, hooks automatically recall curated n8n knowledge (docs, GitHub issues with status,
