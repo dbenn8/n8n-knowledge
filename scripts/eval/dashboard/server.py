@@ -206,6 +206,20 @@ def facets(rows):
 ROW_KEY_COLS = ("run_id", "condition", "prompt_idx", "run_number")
 
 
+def _common_idxs(cells):
+    """Prompt indices the cells are compared over. Only (near-)complete cells — those
+    covering >= 90% of the best-covered cell — define the common set, so an incomplete cell
+    (e.g. a 66/128 bare run) is still reported over its OWN coverage (and qualified by its
+    `cover` count) but can NOT shrink the comparison basis for the complete cells. `or cells`
+    keeps the all-partial fallback (e.g. gap-fill-only scopes)."""
+    cells = [c for c in cells if c[1]]
+    if not cells:
+        return []
+    maxcov = max(len(d) for _, d in cells)
+    comparable = [c for c in cells if len(c[1]) >= 0.9 * maxcov] or cells
+    return sorted(set.intersection(*[set(d) for _, d in comparable]))
+
+
 def get_summary(sysprompt, scope, basis, pro_run_ids=()):
     con = db()
     where = "1=1"
@@ -239,10 +253,7 @@ def get_summary(sysprompt, scope, basis, pro_run_ids=()):
                 cells.append((label, d))
         if not cells:
             continue
-        import math
-        thresh = math.ceil(0.5 * universe)
-        comparable = [c for c in cells if len(c[1]) >= thresh] or cells
-        common = sorted(set.intersection(*[set(d) for _, d in comparable]))
+        common = _common_idxs(cells)
         for label, d in cells:
             idxs = [i for i in common if i in d]
             if not idxs:
