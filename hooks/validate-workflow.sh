@@ -20,7 +20,14 @@ CWD=$(read_field cwd)
 
 CAP="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONMAXCALLS:-10}"
 EDIT_STYLE="${CLAUDE_PLUGIN_OPTION_WORKFLOWEDITSTYLE:-surgical}"
-BUDGET_MODE="${CLAUDE_PLUGIN_OPTION_WORKFLOWVALIDATIONBUDGETMODE:-adaptive}"
+# Validation budget is ALWAYS adaptive — hardcoded, not configurable. The eval
+# campaign (2026-06-16) settled adaptive as the best-of-all-worlds: an INVALID round
+# that reduced the error count vs the previous round is free; only stagnant rounds
+# spend budget; a hard ceiling of 3x max-calls always applies. The old 'static' mode
+# (every call spends a unit) only ever made the loop worse, so it was removed — there
+# is no knob that can break this. Kept as a variable so the python blocks below can
+# stay generic, but it is a constant.
+BUDGET_MODE="adaptive"
 STATE_DIR="$NK_STATE_DIR/workflow-validation"
 
 # Resolve the file to validate based on the tool event.
@@ -192,17 +199,12 @@ if os.path.exists(path):
         state = {"calls": 0}
 
 calls = int(state.get("calls", 0))
-if budget_mode == "adaptive":
-    # Adaptive: only stagnant rounds spend budget. Gate on stagnant strikes
-    # (updated post-validation) and a hard ceiling of cap*3 total calls.
-    stagnant = int(state.get("stagnant", 0))
-    if stagnant >= cap or calls >= cap * 3:
-        print("cap_reached")
-        raise SystemExit(0)
-else:
-    if calls >= cap:
-        print("cap_reached")
-        raise SystemExit(0)
+# Adaptive budget (the only mode): only stagnant rounds spend budget. Gate on
+# stagnant strikes (updated post-validation) and a hard ceiling of cap*3 total calls.
+stagnant = int(state.get("stagnant", 0))
+if stagnant >= cap or calls >= cap * 3:
+    print("cap_reached")
+    raise SystemExit(0)
 
 state["calls"] = calls + 1
 with open(path, "w") as f:
@@ -273,7 +275,7 @@ if [ "$BUDGET_MODE" = "adaptive" ] && [ -n "$SID" ]; then
 fi
 
 if [ "$VALID" = "true" ]; then
-  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" CALLS_USED="$CALLS_USED" CAP="$CAP" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" python3 - 2>/dev/null << 'PYEOF'
+  OK_CTX=$(RESULT_JSON="$RESULT" FILE_PATH="$FILE_PATH" AUTOFIX_JSON="$AUTOFIX_JSON" CALLS_USED="$CALLS_USED" CAP="$CAP" BUDGET_MODE="$BUDGET_MODE" STAGNANT_USED="$STAGNANT_USED" WORKFLOW_TMP="$WORKFLOW_TMP" LIB_DIR="$LIB_DIR" python3 - 2>/dev/null << 'PYEOF'
 import json
 import os
 
@@ -290,13 +292,10 @@ budget_mode = os.environ.get("BUDGET_MODE", "adaptive")
 stagnant_used = os.environ.get("STAGNANT_USED", "0")
 warnings_block = (result.get("warnings_block") or "").strip()
 
-if budget_mode == "adaptive":
-    budget_line = (
-        f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used; "
-        f"{calls_used} total calls."
-    )
-else:
-    budget_line = f"Validator budget: {calls_used} of {cap} calls used this session."
+budget_line = (
+    f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used; "
+    f"{calls_used} total calls."
+)
 
 header = "*** n8n Workflow Validator ***"
 body = [
@@ -312,12 +311,51 @@ if auto_changes:
 if warnings_block:
     body.append("")
     body.append(warnings_block)
-body.extend([
-    "",
-    "Schema check passed. Before stopping, verify: does this workflow fully solve the user's original request? Are all required nodes and connections present?",
-    "- YES → The saved file is the importable output. Tell the user the filename and that they can import it directly into n8n.",
-    "- NO → Add the missing steps, re-save, and wait for the next validation result.",
-])
+# Inspect the WRITTEN workflow for multi-output nodes the model actually used (catches
+# model-ADDED nodes the prompt never named). Reversed loop wiring is schema-VALID, so
+# this is the only place it can be caught post-build.
+_note = None
+_reversed = []
+_caveats = None
+try:
+    import sys as _sys
+    _sys.path.insert(0, os.environ["LIB_DIR"])
+    from nodes_db_inject import multi_output_note, detect_reversed_loop, node_caveats_note
+    _wf = json.load(open(os.environ["WORKFLOW_TMP"]))
+    _note = multi_output_note(_wf)
+    _reversed = detect_reversed_loop(_wf)
+    _caveats = node_caveats_note(_wf)
+except Exception:
+    _note, _reversed, _caveats = None, [], None
+
+# Curated node warnings (deprecations, plan/version limits) — generic, auto-discovered
+# from nodes.db; informational, so it rides along regardless of the reversed-loop gate.
+if _caveats:
+    body.append("")
+    body.append(_caveats)
+
+if _reversed:
+    # SOFT-FAIL: schema passed, but a loop node is wired backwards (loop body on the
+    # wrong output) — it will not iterate at runtime. Require a fix; do NOT offer to stop.
+    body.append("")
+    body.append("FIX REQUIRED — REVERSED LOOP WIRING (schema valid, but this will NOT run correctly):")
+    for it in _reversed:
+        body.append(
+            f"  '{it['node']}': the loop body is connected to output {it['wrong_index']} "
+            f"(\"{it['wrong_output']}\"), but the iteration body MUST connect to output "
+            f"{it['loop_index']} (\"{it['loop_output']}\"); post-loop steps go to the other "
+            "output. Swap these connections and re-save."
+        )
+else:
+    if _note:
+        body.append("")
+        body.append(_note)
+    body.extend([
+        "",
+        "Schema check passed. Before stopping, verify: does this workflow fully solve the user's original request? Are all required nodes and connections present? If you used a multi-output node above, confirm each branch is wired to the correct output INDEX.",
+        "- YES → The saved file is the importable output. Tell the user the filename and that they can import it directly into n8n.",
+        "- NO → Add the missing steps, re-save, and wait for the next validation result.",
+    ])
 print("\n".join(body).join([header + "\n", ""]))
 PYEOF
   ) || exit 0
@@ -433,18 +471,15 @@ guidance = (
     else "Batch ALL fixes below into one complete re-write — each file write spends one validation."
 )
 
-if budget_mode == "adaptive":
-    try:
-        adaptive_remaining = max(0, int(cap) - int(stagnant_used))
-    except ValueError:
-        adaptive_remaining = "?"
-    budget_line = (
-        f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used "
-        f"({adaptive_remaining} remaining); {calls_used} total calls. Rounds that REDUCE the "
-        f"error count are free — fix as many listed errors as possible per round. " + guidance
-    )
-else:
-    budget_line = f"Validator budget: {calls_used} of {cap} calls used ({remaining} remaining). " + guidance
+try:
+    adaptive_remaining = max(0, int(cap) - int(stagnant_used))
+except ValueError:
+    adaptive_remaining = "?"
+budget_line = (
+    f"Validator budget (adaptive): {stagnant_used} of {cap} stagnant rounds used "
+    f"({adaptive_remaining} remaining); {calls_used} total calls. Rounds that REDUCE the "
+    f"error count are free — fix as many listed errors as possible per round. " + guidance
+)
 
 header = "*** n8n Workflow Validator ***"
 body = [
