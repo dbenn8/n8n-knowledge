@@ -25,14 +25,13 @@ def _cell(cells, backend, tier, prefix):
     return None
 
 
-def _row(c, bold):
-    vals = [f"{c['valid_pct']}%", f"{c['correct_pct']}%", f"{c['works_pct']}%",
-            f"{c['gotcha_pct']}%", f"${c['avg_cost']}", f"{c['turns']}",
+def _row(c, label, bold=False):
+    def pct(v):
+        return "—" if v is None else f"{v}%"  # bare is unjudged → no correct%/works%
+    vals = [pct(c['valid_pct']), pct(c['correct_pct']), pct(c['works_pct']),
+            pct(c['gotcha_pct']), f"${c['avg_cost']}", f"{c['turns']}",
             f"{c['time_mean_s']}s / {c['time_median_s']}s"]
-    if bold:
-        cells = ["**plugin (gate-ON, ship default)**"] + [f"**{v}**" for v in vals]
-    else:
-        cells = ["n8n-mcp"] + vals
+    cells = ([f"**{label}**"] + [f"**{v}**" for v in vals]) if bold else ([label] + vals)
     return "| " + " | ".join(cells) + " |"
 
 
@@ -45,9 +44,16 @@ def render_eval_tables(presets):
         mcp = _cell(cells, backend, tier, "mcp")
         if not plugin or not mcp:
             continue
+        rows = [_row(plugin, "plugin (gate-ON, ship default)", bold=True), _row(mcp, "n8n-mcp")]
+        bare = _cell(cells, backend, tier, "bare")
+        if bare:
+            # Raw model, no tools — the status-quo baseline. Unjudged, so the story is valid%.
+            # Qualify with its prompt count when only partially covered.
+            n, full = bare["cover"].split("/")
+            blabel = "raw model — no tools" + (f" ({bare['cover']})" if n != full else "")
+            rows.append(_row(bare, blabel))
         label = TIER_LABEL[(backend, tier)]
-        blocks.append(
-            f"**{label}**{SUFFIX.get((backend, tier), '')}\n\n{HEADER}\n{_row(plugin, True)}\n{_row(mcp, False)}")
+        blocks.append(f"**{label}**{SUFFIX.get((backend, tier), '')}\n\n{HEADER}\n" + "\n".join(rows))
     return "\n\n".join(blocks)
 
 
