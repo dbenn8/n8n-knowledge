@@ -4,6 +4,7 @@
 .tmp/
 .claude/
 scripts/eval/.deepseek.env.local
+scripts/eval/.eval.env.local
 __pycache__/
 .pytest_cache/
 out/

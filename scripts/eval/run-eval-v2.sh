@@ -20,6 +20,18 @@ REPO_DIR="$SCRIPT_DIR/../.."
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RESULTS_DIR="$REPO_DIR/out/eval/$TIMESTAMP-v2"
 
+# Optional local env file (same pattern as deepseek.sh). Sourced BEFORE the
+# defaults below so EVAL_* knobs set there feed the `${VAR:-default}` reads.
+# Override order (lowest → highest precedence), consistent everywhere:
+#   built-in default  <  .eval.env.local / environment  <  CLI flag
+EVAL_ENV_FILE="${EVAL_ENV_FILE:-$SCRIPT_DIR/.eval.env.local}"
+if [ -f "$EVAL_ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$EVAL_ENV_FILE"
+  set +a
+fi
+
 # Defaults
 LIMIT=""
 RUNS=1
@@ -41,7 +53,7 @@ REPAIR_INVALID="${EVAL_REPAIR_INVALID:-0}"            # 1 = repair invalid workf
 REPAIR_MAX_ATTEMPTS="${EVAL_REPAIR_MAX_ATTEMPTS:-3}"  # number of repair rounds after first draft
 CONDITION_ADVANCE_THRESHOLD="${EVAL_CONDITION_ADVANCE_THRESHOLD:-30}"  # start next condition after N completed runs
 MAX_IN_FLIGHT_RUNS="${EVAL_MAX_IN_FLIGHT_RUNS:-0}"    # 0 = unlimited; caps total concurrent runs across conditions
-MODEL_TIMEOUT_SECONDS="${EVAL_MODEL_TIMEOUT_SECONDS:-240}"  # 0 = no timeout
+MODEL_TIMEOUT_SECONDS="${EVAL_MODEL_TIMEOUT_SECONDS:-0}"  # 0 or negative = DISABLED (default). Do NOT default to a positive cap: a wall-clock timeout truncates slow-but-valid runs (esp. complex group-C prompts >240s) and biases results. Override per-run via EVAL_MODEL_TIMEOUT_SECONDS / .eval.env.local / --model-timeout-seconds.
 # 1 = keep session transcripts: sessions run WITH persistence and the transcript
 # JSONL is moved into the per-run folder as prompt-NNN-runNN.transcript.jsonl,
 # so every tool call / hook injection / validator round is reviewable post-run.
