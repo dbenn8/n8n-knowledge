@@ -1561,3 +1561,11 @@ echo ""
 
 # Aggregate results
 python3 "$SCRIPT_DIR/summarize_results.py" "$RESULTS_DIR"
+
+# Auto-ingest into the eval DB so report.py / export_stats.py / the dashboard see
+# this run immediately. Idempotent (dedups) and non-fatal — a failed ingest never
+# fails the run; re-run manually with: python3 scripts/eval/ingest_runs.py --only <dir>
+echo ""
+echo "=== Ingesting $RESULTS_BASENAME into eval database ==="
+python3 "$SCRIPT_DIR/ingest_runs.py" --only "$RESULTS_BASENAME" \
+  || echo "  (auto-ingest failed — non-fatal; run 'python3 scripts/eval/ingest_runs.py --only $RESULTS_BASENAME' manually)"
