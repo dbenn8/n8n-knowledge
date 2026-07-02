@@ -1,0 +1,16 @@
+{
+  "_doc": "Single source of truth for the eval SYSTEM-prompt version. The eval system prompt is shared by ALL conditions (bare/plugin/mcp), so it must be versioned to keep runs comparable. KEEP 'current' UP TO DATE: whenever scripts/eval/run-eval-v2.sh changes the SYSTEM= text or the file-output directive, bump 'current' here (new version label + new hash + new since_utc) and add the previous entry to 'history'. The harness stamps each run's manifest with the current label+hash at launch (authoritative); the ingest falls back to inferring the version by run timestamp for runs that predate manifest stamping.",
+  "current": {
+    "version": "v2-fileoutput",
+    "hash": "55e77d47bef6",
+    "since_utc": "2026-06-10T17:56:31Z",
+    "desc": "Shared neutral build prompt ('You are helping a user build n8n workflows...') + the 'save the final workflow as a single .json file in <folder>' file-output directive, applied UNIFORMLY to bare/plugin/mcp. Hash is over the SYSTEM base + the file-output directive template with the per-run folder path normalized to <DIR>."
+  },
+  "history": [
+    {
+      "version": "legacy-pre-fileoutput",
+      "until_utc": "2026-06-10T17:56:31Z",
+      "desc": "Pre-file-output era. Varied and not precisely recoverable from artifacts (the system prompt is not stored in transcripts): included early single-SYSTEM variants and brief working-tree experiments with per-condition SYSTEM_BARE/SYSTEM_PLUGIN/SYSTEM_MCP. Runs in this window should be treated as low-confidence for cross-version comparison."
+    }
+  ]
+}
