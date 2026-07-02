@@ -88,6 +88,29 @@ if [ -n "${EVAL_CONDITIONS_PARALLEL:-}" ]; then
   CONDITIONS_PARALLEL="$EVAL_CONDITIONS_PARALLEL"
 fi
 
+# --- CRITICAL: force the real DeepSeek model id onto the wire ----------------
+# Passing a Claude ALIAS (e.g. --model claude-sonnet-4-6) and relying on
+# ANTHROPIC_DEFAULT_SONNET_MODEL to remap it does NOT work: Claude Code keeps the
+# alias label internally but sends the actual agent turns to the HAIKU default
+# (= $FLASH_MODEL). Empirically proven 2026-06-24: every "Pro" run without this
+# rewrite actually ran on deepseek-v4-flash (transcripts: 0 pro responses).
+# Fix: rewrite the --model VALUE to the concrete DeepSeek id so Claude Code puts it
+# on the wire verbatim (probe: --model deepseek-v4-pro[1m] -> served deepseek-v4-pro).
+# TARGET_BACKEND is still derived from the caller's alias above, so the existing
+# interface (--model claude-sonnet-4-6 => pro, --model claude-haiku-4-5 => flash)
+# is preserved; we only swap the on-the-wire value. VERIFY served model every run.
+if [ "$TARGET_BACKEND" = "flash" ]; then
+  WIRE_MODEL="$FLASH_MODEL"
+else
+  WIRE_MODEL="$PRO_MODEL"
+fi
+for ((i=0; i<${#ARGS[@]}; i++)); do
+  if [ "${ARGS[$i]}" = "--model" ] && [ $((i + 1)) -lt ${#ARGS[@]} ]; then
+    ARGS[$((i + 1))]="$WIRE_MODEL"
+    break
+  fi
+done
+
 ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic" \
 ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY" \
 ANTHROPIC_MODEL="$PRO_MODEL" \

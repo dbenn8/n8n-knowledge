@@ -10,3 +10,20 @@ out/
 *.db
 # Cross-repo hash-parity fixture must be committed (small, deterministic).
 !tests/fixtures/nodes-parity-fixture.db
+
+# Eval/test scratch that leaks to the repo root (generated workflows, worktrees,
+# unpacked npm tarballs). Real workflow examples live under their own tracked dir.
+/claude-worktrees/
+/claude-worktrees-gotcha/
+/flows/
+/workflows/
+/workflow-templates/
+/package/
+/n8n-workflow-*.tgz
+/*.json
+# ...but keep real root config if any is ever added:
+!/plugin.json
+!/package.json
+!/package-lock.json
+!/marketplace.json
+!/tsconfig.json
