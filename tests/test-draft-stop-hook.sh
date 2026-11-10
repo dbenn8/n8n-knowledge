@@ -67,12 +67,12 @@ run_hook() {
 
 echo "=== draft stop hook tests ==="
 
-# --- Test 1: option disabled (env unset) + pending state + marker file -> no output ---
+# --- Test 1: option disabled (set to false) + pending state + marker file -> no output ---
 SID1="draftstop-disabled-$$"
 MARKER_FILE1="$WORK_DIR/disabled.workflow.json"
 printf '!!DRAFT!!\n{"nodes": [], "connections": {}}\n' > "$MARKER_FILE1"
 write_state "$SID1" "{\"calls\": 1, \"draft_pending\": \"$MARKER_FILE1\"}"
-OUT=$(run_hook "$SID1" | bash "$HOOK")
+OUT=$(run_hook "$SID1" | CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=false bash "$HOOK")
 assert_eq "option disabled -> no output" "" "$OUT"
 
 # --- Test 2: option enabled, no state file -> no output ---

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.12 (2026-11-10)
+
+### Validation works out of the box
+- **Workflow validation is now on by default** (`enableWorkflowValidation` defaults to `true`; the hooks treat an unset option as on). Set it to `false` to opt out. The README calls this out in the intro, the privacy note and the validation section. The eval harness now passes `false` explicitly when `EVAL_ENABLE_PLUGIN_WORKFLOW_VALIDATION=0`.
+- The workflow build instructions injected when recall is skipped now only go out in n8n projects (n8n codebase or consumer). With validation on by default they would otherwise be added to every prompt in every project.
+- `validatorCloudUrl` now defaults to the hosted validator (`https://n8nhindsight.applikuapp.com/public/validate-workflow`). Before, the default was empty, so with no local `n8n-mcp` install every validation call failed with "validator_mode=default found neither local validator nor validator_cloud_url". A fresh install with `enableWorkflowValidation` on now validates against the cloud with no further config. A local `n8n-mcp` install still takes precedence in `default` mode.
+- README: the local-only escape hatch now names the `validatorMode` plugin option. It previously named `EVAL_PLUGIN_VALIDATOR_MODE`, which only the eval harness reads.
+
 ## 0.3.11 (2026-06-25)
 
 ### Build-layer injection + gotcha design gate (the benchmarked plugin)

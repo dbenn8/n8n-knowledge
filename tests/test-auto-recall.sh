@@ -44,6 +44,12 @@ else
   echo "  SKIP: n8n message test (API unreachable)"
 fi
 
+# Test 1b: validation is on by default, but a skipped recall in an n8n project still
+# gets the build instructions (the plugin repo's own README mentions n8n).
+N8N_CWD=$(cd "$SCRIPT_DIR/.." && pwd)
+output=$(python3 -c "import json,sys;print(json.dumps({'session_id':'t1b','cwd':sys.argv[1],'hook_event_name':'UserPromptSubmit','prompt':'How do I write a Python function to sort a list?'}))" "$N8N_CWD" | CLAUDE_PLUGIN_OPTION_ENABLEAUTORECALL=true bash "$HOOK" 2>/dev/null)
+assert_contains "skipped recall in n8n project still gets build instructions" "n8n Workflow Build Instructions" "$output"
+
 # Test 3: Disabled auto-recall produces no output
 output=$(cat "$SCRIPT_DIR/fixtures/prompt-with-n8n.json" | CLAUDE_PLUGIN_OPTION_ENABLEAUTORECALL=false bash "$HOOK" 2>/dev/null)
 assert_eq "disabled auto-recall returns empty" "" "$output"

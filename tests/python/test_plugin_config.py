@@ -76,6 +76,7 @@ def test_load_config_returns_defaults_for_empty_dir(tmp_path):
     # explicit empty dir is required for a CWD-independent defaults check.
     cfg = pc.load_config(str(tmp_path))
     assert cfg["validator_mode"] == "default"
+    assert cfg["validator_cloud_url"] == pc.DEFAULT_VALIDATOR_CLOUD_URL
     assert cfg["max_results"] == 5
     assert cfg["docs_base"] == 80
     # Must be a copy, not the shared DEFAULTS object.
@@ -188,9 +189,19 @@ def test_resolve_default_falls_back_to_cloud(monkeypatch):
     assert "fell back to cloud" in res["reason"]
 
 
+def test_resolve_out_of_box_defaults_use_hosted_cloud(tmp_path, monkeypatch):
+    # A fresh install (no local n8n-mcp, no config) must validate, not fail closed.
+    monkeypatch.setattr(pc, "find_n8n_mcp_install_root", lambda cfg: None)
+    for env in pc.ENV_OVERRIDES.values():
+        monkeypatch.delenv(env, raising=False)
+    res = pc.resolve_validator_target_config(pc.load_config(str(tmp_path)))
+    assert res["effective_mode"] == "cloud"
+    assert res["cloud_url"] == pc.DEFAULT_VALIDATOR_CLOUD_URL
+
+
 def test_resolve_default_neither_available(monkeypatch):
     monkeypatch.setattr(pc, "find_n8n_mcp_install_root", lambda cfg: None)
-    res = pc.resolve_validator_target_config({"validator_mode": "default"})
+    res = pc.resolve_validator_target_config({"validator_mode": "default", "validator_cloud_url": ""})
     assert res["effective_mode"] is None
     assert "neither local validator nor validator_cloud_url" in res["reason"]
 
@@ -212,7 +223,7 @@ def test_resolve_explicit_local_available(monkeypatch):
 
 def test_resolve_explicit_cloud_requires_url(monkeypatch):
     monkeypatch.setattr(pc, "find_n8n_mcp_install_root", lambda cfg: None)
-    res = pc.resolve_validator_target_config({"validator_mode": "cloud"})
+    res = pc.resolve_validator_target_config({"validator_mode": "cloud", "validator_cloud_url": ""})
     assert res["effective_mode"] is None
     assert "validator_cloud_url is not configured" in res["reason"]
 
@@ -245,6 +256,6 @@ def test_resolve_unknown_mode_normalizes_to_default(monkeypatch):
 
 def test_resolve_local_nodes_db_path_none_without_root(monkeypatch):
     monkeypatch.setattr(pc, "find_n8n_mcp_install_root", lambda cfg: None)
-    res = pc.resolve_validator_target_config({"validator_mode": "default"})
+    res = pc.resolve_validator_target_config({"validator_mode": "default", "validator_cloud_url": ""})
     assert res["local_nodes_db_path"] is None
     assert res["cloud_url"] is None
