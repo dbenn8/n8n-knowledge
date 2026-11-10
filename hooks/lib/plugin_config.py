@@ -13,6 +13,10 @@ import glob
 import os
 from typing import Any
 
+# Hosted validator. It sits on the same public host as recall and forwards to the
+# validator app, so the backend can move without a plugin release.
+DEFAULT_VALIDATOR_CLOUD_URL = "https://n8nhindsight.applikuapp.com/public/validate-workflow"
+
 DEFAULTS = {
     "high_threshold": 70,
     "medium_threshold": 50,
@@ -35,7 +39,7 @@ DEFAULTS = {
     "max_text_length_low": 300,
     # Plugin-side validator routing config only.
     "validator_mode": "default",  # default | local | cloud
-    "validator_cloud_url": "",
+    "validator_cloud_url": DEFAULT_VALIDATOR_CLOUD_URL,
     "validator_local_path": "",
 }
 

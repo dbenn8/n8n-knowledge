@@ -1,6 +1,6 @@
 # n8n Knowledge — Claude Code Plugin
 
-**v0.3.11**
+**v0.3.12**
 
 A Claude Code plugin that makes Claude better at n8n. When it detects you're working on
 n8n, hooks automatically recall curated n8n knowledge (docs, GitHub issues with status,
@@ -82,7 +82,7 @@ flowchart TD
         VH["/public/validator-health<br/>versions + nodes_content_sha256"]
     end
 
-    LOCALV["Local n8n-mcp install<br/>(EVAL_PLUGIN_VALIDATOR_MODE=local)"]
+    LOCALV["Local n8n-mcp install<br/>(validatorMode=local)"]
 
     UP -->|"prompt text + tag filters"| REC
     NL --> UP
@@ -179,7 +179,7 @@ This is the trust section. Plainly:
   Hindsight instance, not an official n8n service. If you don't want your prompts leaving your
   machine, disable auto-recall and backstop recall, or self-host the service (see below).
 - **Your workflow JSON** is sent to the **cloud validator**
-  (`https://n8nvalidator.applikuapp.com/public/validate-workflow`) when the optional workflow
+  (`https://n8nhindsight.applikuapp.com/public/validate-workflow`, which forwards to the validator app) when the optional workflow
   validation hook runs in cloud or default mode *and no local validator is found*. In `local`
   mode (or default mode with a local `n8n-mcp` install present), validation runs entirely on
   your machine and **no workflow JSON leaves it**.
@@ -195,7 +195,7 @@ This is the trust section. Plainly:
 
 ## Self-hosting and escape hatches
 
-- **Local-only validation:** set `EVAL_PLUGIN_VALIDATOR_MODE=local` (or `validator_mode: local`
+- **Local-only validation:** set the `validatorMode` plugin option to `local` (or `validator_mode: local`
   in `.claude/n8n-knowledge.local.md`) to require a local `n8n-mcp` install and keep workflow
   JSON on your machine. The plugin auto-detects the default `n8n-mcp` root under
   `~/.npm/_npx/.../node_modules/n8n-mcp`, or you can point it explicitly with
@@ -293,7 +293,7 @@ fuller write-up with methodology is in the [eval case study](https://danb.bio/pr
 | `backstopRecallMaxTokens` | `8000` | Returned-context size cap per backstop recall. |
 | `backstopRecallBudget` | `high` | Hindsight recall effort: `low`, `mid`, or `high`. |
 | `validatorMode` | `default` | Validator routing: `local`, `cloud`, or `default` (prefer local n8n-mcp, fall back to cloud). |
-| `validatorCloudUrl` | `""` | Cloud validator endpoint URL. |
+| `validatorCloudUrl` | `https://n8nhindsight.applikuapp.com/public/validate-workflow` | Cloud validator endpoint URL. The hosted default works out of the box; set your own to self-host. |
 | `validatorLocalPath` | `""` | Override the local n8n-mcp install root (blank = auto-detect). |
 | `debugRecall` | `summary` | Local debug output to `~/.cache/n8n-knowledge/debug.log`: `off`, `summary`, `full`. |
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.12 (2026-11-10)
+
+### Validation works out of the box
+- `validatorCloudUrl` now defaults to the hosted validator (`https://n8nhindsight.applikuapp.com/public/validate-workflow`). Before, the default was empty, so with no local `n8n-mcp` install every validation call failed with "validator_mode=default found neither local validator nor validator_cloud_url". A fresh install with `enableWorkflowValidation` on now validates against the cloud with no further config. A local `n8n-mcp` install still takes precedence in `default` mode.
+- README: the local-only escape hatch now names the `validatorMode` plugin option. It previously named `EVAL_PLUGIN_VALIDATOR_MODE`, which only the eval harness reads.
+
 ## 0.3.11 (2026-06-25)
 
 ### Build-layer injection + gotcha design gate (the benchmarked plugin)

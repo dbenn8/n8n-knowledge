@@ -2,7 +2,7 @@
   "name": "n8n-knowledge",
   "displayName": "n8n Knowledge Base",
   "description": "Auto-recalls n8n documentation and community knowledge when working on n8n projects. Powered by a Hindsight graph memory database with 315+ pages of official n8n docs.",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "author": {
     "name": "Dan Bennett"
   },
@@ -32,7 +32,7 @@
     "triggerKeywords": { "type": "string", "title": "Trigger Keywords", "description": "Comma list of broad n8n trigger keywords used in n8n codebases. Use the token DEFAULTS to include the built-ins (workflow, node, trigger, webhook, credential, expression, execution). Example: 'DEFAULTS, mynode'. Leave blank for defaults.", "default": "" },
     "debugRecall": { "type": "string", "title": "Debug Recall", "description": "Show injected context in your terminal. 'summary' shows a truncated preview, 'full' shows everything the harness receives, 'off' hides output.", "default": "summary" },
     "validatorMode": { "type": "string", "title": "Validator Mode", "description": "Plugin-side validator routing only. Choose 'local', 'cloud', or 'default'. 'default' prefers a local n8n-mcp install and falls back to the cloud validator URL. This setting is not for the eval harness MCP/bare conditions or local post-hoc validation scripts.", "default": "default" },
-    "validatorCloudUrl": { "type": "string", "title": "Validator Cloud URL", "description": "Plugin-side validator endpoint URL, for example https://your-host/public/validate-workflow. Not used by MCP/bare eval conditions or local post-hoc validation scripts.", "default": "" },
+    "validatorCloudUrl": { "type": "string", "title": "Validator Cloud URL", "description": "Plugin-side validator endpoint URL. Defaults to the hosted validator; point it at your own https://your-host/public/validate-workflow to self-host. Not used by MCP/bare eval conditions or local post-hoc validation scripts.", "default": "https://n8nhindsight.applikuapp.com/public/validate-workflow" },
     "validatorLocalPath": { "type": "string", "title": "Validator Local Path", "description": "Optional plugin-side override for the local n8n-mcp install root. Leave blank to auto-detect the default ~/.npm/_npx/.../node_modules/n8n-mcp location. Not used by MCP/bare eval conditions or local post-hoc validation scripts.", "default": "" }
   }
 }
