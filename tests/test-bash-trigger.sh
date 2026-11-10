@@ -129,13 +129,13 @@ OUT=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=true bash "$HOOK" < "$HOOK_I
 assert_eq "Bash event on unchanged file produces no output" "" "$OUT"
 assert_eq "Bash event on unchanged file does not charge budget" "1" "$(read_state_field "$STATE_DIR/$SID4.json" calls)"
 
-# 5. Bash event, option disabled (env unset) -> no output.
+# 5. Bash event, option disabled (set to false) -> no output.
 SID5="bash-trigger-disabled-$$"
 DISABLED_FILE="$WORK_DIR/disabled.workflow.json"
 printf '%s\n' "$INVALID_JSON" > "$DISABLED_FILE"
 python3 -c "import json,sys;json.dump({'calls':0,'draft_pending':sys.argv[1],'last_validated_hash':'stale0000'}, open(sys.argv[2],'w'))" "$DISABLED_FILE" "$STATE_DIR/$SID5.json"
 build_hook_input "$SID5" "Bash" ""
-OUT=$(bash "$HOOK" < "$HOOK_INPUT_FILE")
+OUT=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=false bash "$HOOK" < "$HOOK_INPUT_FILE")
 assert_eq "Bash event with validation disabled produces no output" "" "$OUT"
 
 # 6. Non-Bash non-Edit non-Write tool (Read) -> no output.

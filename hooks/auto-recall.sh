@@ -16,7 +16,7 @@ nk_runtime_init
 # paths — the build protocol must reach the model whenever the user is building a
 # workflow, independent of whether semantic recall happened to trigger.
 build_validator_guidance() {
-  [ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-false}" = "true" ] || return 0
+  [ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-true}" = "true" ] || return 0
   # Generic, real-world plugin behavior: explain the validator feedback loop the model
   # will receive. This does NOT dictate where to save (that is the host's/user's choice,
   # or — in the eval — a neutral directive in the shared system prompt for all conditions).
@@ -81,7 +81,12 @@ with open(debug_log, 'a') as f:
   fi
   # Recall was skipped, but workflow build instructions (and eval-mode output folder)
   # must still reach the model if validation is enabled — they are not recall-dependent.
-  SKIP_GUIDANCE=$(build_validator_guidance)
+  # Only in n8n projects: validation is on by default, so without this gate every prompt
+  # in every project (e.g. a plain Python question) would get n8n build instructions.
+  SKIP_GUIDANCE=""
+  if [ "$(is_n8n_codebase "$CWD")" = "yes" ] || [ "$(is_n8n_consumer "$CWD")" = "yes" ]; then
+    SKIP_GUIDANCE=$(build_validator_guidance)
+  fi
   if [ -n "$SKIP_GUIDANCE" ]; then
     python3 "$SCRIPT_DIR/lib/hook_json.py" emit UserPromptSubmit "$SKIP_GUIDANCE" 2>/dev/null || true
   fi

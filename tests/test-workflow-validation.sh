@@ -28,9 +28,9 @@ print(json.dumps({
 }))
 PYEOF
 
-# Disabled by default -> no output.
-out0=$(bash "$HOOK" <<< "$(mk_payload Write "$WF")")
-assert_eq "disabled by default" "" "$out0"
+# Explicit opt-out -> no output.
+out0=$(CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION=false bash "$HOOK" <<< "$(mk_payload Write "$WF")")
+assert_eq "disabled when set to false" "" "$out0"
 
 # Enabled + valid mock -> injects a success notice with a completeness gate.
 VALID_MOCK='{"valid": true, "error_count": 0, "warning_count": 0, "errors": [], "warnings": [], "statistics": {"totalNodes": 1, "triggerNodes": 1}, "suggestions": []}'
@@ -39,6 +39,10 @@ assert_contains "valid workflow returns hook json" "hookSpecificOutput" "$out1"
 assert_contains "valid workflow includes success header" "n8n Workflow Validator" "$out1"
 assert_contains "valid workflow includes pass notice" "Validation passed" "$out1"
 assert_contains "valid workflow includes completeness gate" "fully solve the user's original request" "$out1"
+
+# On by default: option unset -> the hook validates.
+out_default=$(env -u CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION N8N_KNOWLEDGE_VALIDATOR_MOCK_RESPONSE="$VALID_MOCK" bash "$HOOK" <<< "$(mk_payload Write "$WF")")
+assert_contains "enabled by default" "Validation passed" "$out_default"
 
 # Enabled + invalid mock -> injects PostToolUse additionalContext.
 INVALID_MOCK='{"valid": false, "error_count": 1, "warning_count": 0, "errors": [{"type":"error","message":"Required property '\''To'\'' cannot be empty","node":"Slack"}], "warnings": [], "statistics": {"totalNodes": 2, "triggerNodes": 1}, "suggestions": []}'

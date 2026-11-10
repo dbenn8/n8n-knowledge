@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/runtime_dirs.sh"
 nk_runtime_init
 
-[ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-false}" = "true" ] || exit 0
+[ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-true}" = "true" ] || exit 0
 
 INPUT=$(cat 2>/dev/null) || exit 0
 SID=$(printf '%s' "$INPUT" | python3 -c "import json,sys;print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null) || exit 0

@@ -9,7 +9,7 @@ source "$LIB_DIR/runtime_dirs.sh"
 # Per-user runtime paths: session validator state lives under ~/.cache (0700), not /tmp.
 nk_runtime_init
 
-[ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-false}" = "true" ] || exit 0
+[ "${CLAUDE_PLUGIN_OPTION_ENABLEWORKFLOWVALIDATION:-true}" = "true" ] || exit 0
 
 INPUT=$(cat 2>/dev/null) || exit 0
 read_field(){ printf '%s' "$INPUT" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('$1',''))" 2>/dev/null; }

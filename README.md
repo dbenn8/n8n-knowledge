@@ -5,8 +5,8 @@
 A Claude Code plugin that makes Claude better at n8n. When it detects you're working on
 n8n, hooks automatically recall curated n8n knowledge (docs, GitHub issues with status,
 community workarounds, node specs) and inject it as context — no web-search permissions, no
-MCP server, no API keys. When Claude writes a workflow JSON file, an optional `PostToolUse`
-hook validates it against the n8n-mcp validation engine, feeds the errors back, and lets
+MCP server, no API keys. When Claude writes a workflow JSON file, a `PostToolUse`
+hook (**on by default**) validates it against the n8n-mcp validation engine, feeds the errors back, and lets
 Claude fix them in the same turn.
 
 The knowledge is served by a hosted [Hindsight](https://github.com/dbenn8/n8n-hindsight)
@@ -16,8 +16,9 @@ service and the validator are open source and self-hostable — see
 [n8n-hindsight](https://github.com/dbenn8/n8n-hindsight).
 
 > **Privacy:** auto-recall sends your prompt text to the author's hosted recall endpoint when
-> n8n context is detected, and the optional validator can send your workflow JSON to a cloud
-> service. Read [What data leaves your machine](#what-data-leaves-your-machine) before installing.
+> n8n context is detected, and **workflow validation is on by default**: unless you have a local
+> `n8n-mcp` install or set `enableWorkflowValidation` to `false`, each workflow JSON file Claude
+> writes is sent to the hosted validator. Read [What data leaves your machine](#what-data-leaves-your-machine) before installing.
 > The **validator can run fully local** (point it at a local `n8n-mcp` install). The **knowledge
 > database is not local** — recall is served from the author's hosted `n8n` Hindsight bank. The
 > [n8n-hindsight](https://github.com/dbenn8/n8n-hindsight) stack is open source and self-hostable,
@@ -68,7 +69,7 @@ flowchart TD
     subgraph local["Your machine — Claude Code"]
         UP["UserPromptSubmit hook<br/>detect-n8n + keyword gate"]
         NL["node_lookup.py<br/>3,591-entry dictionary"]
-        PT["PostToolUse hook<br/>workflow JSON validation<br/>(optional, off by default)"]
+        PT["PostToolUse hook<br/>workflow JSON validation<br/>(on by default)"]
         BS["PostToolUse backstop<br/>mid-turn refresh"]
     end
 
@@ -145,10 +146,14 @@ flowchart TD
   importable JSON. Sticky notes and source JSON are suppressed from auto-recall (available via
   manual recall to avoid context bloat).
 
-### Workflow validation hook (optional, off by default)
+### Workflow validation hook (on by default)
 
-When enabled (`Enable Workflow Validation`), a `PostToolUse` hook fires after Claude writes or
-edits a workflow JSON file:
+> **Validation runs out of the box.** No setup needed: with no local `n8n-mcp` install, the hook
+> uses the hosted validator at `https://n8nhindsight.applikuapp.com/public/validate-workflow`.
+> Install `n8n-mcp` locally (or set `validatorMode` to `local`) to keep workflow JSON on your
+> machine, or set `enableWorkflowValidation` to `false` to turn validation off.
+
+A `PostToolUse` hook fires after Claude writes or edits a workflow JSON file:
 
 - runs only on plugin-side `Edit`/`Write` events, on workflow JSON only;
 - validates via the routing settings below (`local`, `cloud`, or `default`);
@@ -179,8 +184,8 @@ This is the trust section. Plainly:
   Hindsight instance, not an official n8n service. If you don't want your prompts leaving your
   machine, disable auto-recall and backstop recall, or self-host the service (see below).
 - **Your workflow JSON** is sent to the **cloud validator**
-  (`https://n8nhindsight.applikuapp.com/public/validate-workflow`, which forwards to the validator app) when the optional workflow
-  validation hook runs in cloud or default mode *and no local validator is found*. In `local`
+  (`https://n8nhindsight.applikuapp.com/public/validate-workflow`, which forwards to the validator app) when the workflow
+  validation hook (on by default) runs in cloud or default mode *and no local validator is found*. In `local`
   mode (or default mode with a local `n8n-mcp` install present), validation runs entirely on
   your machine and **no workflow JSON leaves it**.
 - **Nothing else.** No credentials, no file contents beyond the workflow JSON you asked it to
@@ -286,7 +291,7 @@ fuller write-up with methodology is in the [eval case study](https://danb.bio/pr
 |---|---|---|
 | `enableAutoRecall` | `true` | Auto-recall on every message. Disable for manual-only (saves tokens, stops prompt text leaving your machine). |
 | `showRecallResults` | `true` | When enabled, Claude cites the knowledge base. When disabled, Claude uses the context silently. |
-| `enableWorkflowValidation` | `false` | Plugin-side validation after Claude writes/edits workflow JSON. |
+| `enableWorkflowValidation` | `true` | Validate workflow JSON after Claude writes/edits it and feed errors back so Claude fixes them. Set `false` to turn off. |
 | `workflowValidationMaxCalls` | `3` | Max plugin-side validator calls per session. |
 | `enableBackstopRecall` | `true` | Refresh n8n context during agent reasoning (after Edit/Write/Task). |
 | `backstopRecallCap` | `4` | Max backstop recalls per session. |
